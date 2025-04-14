@@ -1,0 +1,4134 @@
+---
+title: "Ple.27.3a.21-32 Annual Assessment Data Investigation"
+author:
+  - name: "Elliot J. Brown"
+  - name: "Sven Stötera"
+  - name: "Casper W. Berg"
+date: sys.date()
+output: 
+  bookdown::html_document2:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    code_download: true
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 90% !important;
+  margin: auto;
+}
+p.caption {
+  font-size: 0.8em;
+  font-style: italic;
+}
+</style>
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo=TRUE,
+                      eval = TRUE,
+                      warning = FALSE,
+                      fig.align = "center",
+                      tidy = 'formatR',
+                      out.width = "90%")
+
+#===
+# Manual settings for figure formatting
+#====
+# ebpal <- c("#2F3EEA", "#1FD082", "#030F4F", "#F6D04D", "#FC7634", "#F7BBB1", "#E83F48", "#008835", "#79238E")
+ebpal <- c("#800080", "#006400", "#D55E00", "#0072B2", "#F0E442", "#009E73", "#E69F00", "#56B4E9", "#CC79A7", "#5DA5DA", "#FF8000", "#89CFF0", "#A52A2A", "#77DD77", "#FFFACD")
+#=====
+```
+
+# Introduction
+## Contents
+This script generates a working document describing the data available for an assessment of ple.27.3a.21-32; Plaice in the Kattegat, The Belt Seas and the Baltic Sea.  The report generated covers the following topics:
+
+- Assessment Input Data
+  - Catches and Landings
+  - Survey Indices
+  - Biological Data
+  - Reference Points
+- Background Data and _ad-hoc_ Requests are dealt with in the relevant sections.
+  
+Most of the code used to process data and create visualisations are hidden in this HTML.  To view each chunk, simply click on the button to the right of the relevant section.  To download the entire R-markdown (.rmd) file including all text and code chunks, use the _code_ button at the top of the page, with the dropdown arrow.  
+
+## Preparation
+To run this script you require the following packages and functions:
+
+```{r message=FALSE, results="hide"}
+require(mgcv)
+require(data.table)
+require(reshape2)
+require(knitr)
+require(scales)
+require(bookdown)
+require(ggplot2)
+require(ggthemes)
+require(stringr)
+require(lattice)
+require(plyr)
+require(plotly)
+require(icesAdvice)
+require("stockassessment") # available from https://github.com/fishfollower/SAM
+require(parallel)
+require(sf)
+
+myprop <- function(df, nomo = "nomo", NoAtLngt = "CANoAtLngt"){
+  t <- sum(df$nomo)/sum(df$CANoAtLngt)
+}
+
+catchFrac <- function(x, nm, w, frac){
+  F <- getF(x)
+  Z <- F+nm
+  N <- getN(x)
+  C <- F/Z*(1-exp(-Z))*N
+  return(sum(frac*w*C))
+}
+
+save_as_lowestoft <- function(df, file_path, title,
+                              rando_numbers = paste(c("1", "6"), collapse = "\t"),
+                              year_range = paste(c(2002, DataYear+1), collapse = "\t"), 
+                              age_range = paste(c(1, 10), collapse = "\t"),
+                              timeseries_type = paste(c(1, "# 1 indicates annually varying, 2 indicates fixed values"), collapse = "\t")) {
+  # Open a connection to the file
+  con <- file(file_path, open = "wt")
+  
+  # Write the header (customize as needed)
+  writeLines(paste0(title), con)
+  writeLines(paste0(rando_numbers), con)
+  writeLines(paste0(year_range), con)
+  writeLines(paste0(age_range), con)
+  writeLines(paste0(timeseries_type), con)
+  
+  # Write the dataframe to the file
+  write.table(df, con, sep = "\t", row.names = FALSE, col.names = FALSE, quote = FALSE)
+  
+  # Close the connection
+  close(con)
+}
+
+## Create sequences for moving window average:
+an = function(n, len) c(seq.int(n), rep(n, len-n))
+
+```
+
+We also need to set a few variables manually.  
+The first is the *DataYear*, which is the year immediately preceeding the assessment year or the year for which the most recent data is available.  
+The second is the catch we (ICES) advised as TAC for the last assessment *LastIcesAdvice*, in tonnes. __NOTE__ this value is taken from the advice sheet, to compare changes in advice, not changes in advice relative to actual Allowable Catches.
+The third is whether this run is exploratory, or to be used to generate the final advice. This option will determine the number of iterations used to determine the short-term forecasts. 
+
+```{r}
+DataYear <- 2024
+LastIcesAdvice <- 25365 # Advised catch for areas 21-32 (from stock splitting table in advice)
+isFinal <- FALSE
+# isFinal <- TRUE
+
+readPath <- paste0("../", (DataYear+1), "/Surveys/")
+dataPath <- paste0("DataProcessed/Surveys/")
+figPath <- paste0("Figures/")
+```
+
+# Assessment Input Data
+## Landings and Catches
+Catch data, including break downs by landings/discards, are taken directly from inter-catch for each of the historic stocks (namely ple.27.21-23 and ple.27.24-32), where discards and sampled measures are raised according to the prioritisation described in the corresponding stock annexes, before the resultant catch data are combined. The imported table is the cumulative extracts from InterCatch, specifically _Table 1_ from the _AllCatches_ extraction and file _CatchAndSampleDataTables.txt_.
+
+Furthermore, recreational catches from Germany have been introduced late in the process.  Here we describe the data that are available for incorporation into an assessment model, but also describe how these data will be further integrated to the whole assessment procedure in the near future. 
+
+```{r}
+## Read in the combined Intercatch output from the two old stocks.
+ic_raw <- read.csv(file = "DataIn/CatchData/Ple.27.21-32_IntercatchTable1_2002-Current.csv", header = T)
+
+## Read in historic TAC values by area
+tac_raw <- read.csv(file = "DataIn/ple.27.21_22-32_TAC-Histories_2000-DataYear.csv", header = T)
+```
+
+These data are cleaned according to data formats and naming conventions (hidden chunk).
+```{r}
+ic_raw$Year <- as.factor(as.character(ic_raw$Year))
+# ic_raw$CatchCategory <- as.factor(gsub(pattern = "BMS landing",
+#                                        replacement = "BMS",
+#                                        x = ic_raw$CatchCategory))
+ic_raw$Season <- as.factor(as.character(ic_raw$Season))
+names(ic_raw)[names(ic_raw) == "CATON..Tons."] <- "CATON"
+ic_raw$Fleet <- gsub(pattern = ' ', replacement = "", x = ic_raw$Fleet, fixed = TRUE)
+### Allocate some strange fleet types according to logic, or "All" to "Active" as the most likely.
+ic_raw[ic_raw$Fleet %in% c("OTB_CRU_90-119_0_0_all", "MIS_MIS_0_0_0_HC", "MIS_MIS_0_0_0_IBC", "Acitve ", "Trawl", "All", "Fleet-All"), "Fleet"] <- "Active"
+ic_raw[ic_raw$Fleet %in% c("GNS_DEF_all_0_0_all", "Passive ", "Gillnet", "Trapnet", "Longline"), "Fleet"] <- "Passive"
+ic_clean <- droplevels(ic_raw)
+
+## Create novel fleet by management area
+ic_clean$Fleet2 <- ifelse(ic_clean$Area == "27.3.a.21" & ic_clean$Fleet == "Active", "NS_Active",
+                          ifelse(ic_clean$Area == "27.3.a.21" & ic_clean$Fleet == "Passive", "NS_Passive",
+                                 ifelse(ic_clean$Area != "27.3.a.21" & ic_clean$Fleet == "Active", "BS_Active",
+                                        ifelse(ic_clean$Area != "27.3.a.21" & ic_clean$Fleet == "Passive", "BS_Passive", NA))))
+ic_clean$MgmtArea <- ifelse(ic_clean$Area == "27.3.a.21", "NorthSea", "BalticSea")
+
+### Clean TAC data
+tac_raw$Year <- as.factor(as.character(tac_raw$Year))
+tac_raw$MgmtArea <- ifelse(tac_raw$Area == "27.3.a.21", "NorthSea", "BalticSea")
+
+k <- c("k", "ic_clean", "myprop", "DataYear", "ebpal", "isFinal", "LastIcesAdvice", "save_as_lowestoft", "an", "tac_raw")
+rm(ic_raw)
+```
+
+Historic landings and TAC values are imported from legacy records (hidden chunk). _These need to be collated for the new "super stock"_.
+```{r eval=FALSE}
+HistLand_raw <- read.csv(file = "Data/ple.27.21-23_HistoricLandings_1970-2017.csv", header = T)
+HistLand_raw$Year <- as.factor(as.character(HistLand_raw$Year))
+
+
+
+#===
+# Update HistLand
+#====
+landings <- aggregate(CATON~Area+Country+Year,
+                          data = ic_clean[as.numeric(as.character(ic_clean$Year)) >= 2018 & ic_clean$CatchCategory != "Discards", ],
+                          FUN = sum)
+colnames(landings)[colnames(landings) == "CATON"] <- "Landings"
+
+# landings2018 <- aggregate(CATON~Area+Country+Year, 
+#                           data = ic_clean[ic_clean$Year == "2018" & ic_clean$CatchCategory != "Discards", ],
+#                           FUN = sum)
+# landings2018$Year <- as.factor(as.character(2018))
+# names(landings2018)[names(landings2018) == "CATON"] <- "Landings"
+# # landings2018$Landings <- landings2018$Landings/1000
+# 
+# 
+# landings2019 <- aggregate(CATON~Area+Country, 
+#                           data = ic_clean[ic_clean$Year == "2019" & ic_clean$CatchCategory != "Discards", ],
+#                           FUN = sum)
+# landings2019$Year <- as.factor(as.character(2019))
+# names(landings2019)[names(landings2019) == "CATON"] <- "Landings"
+# # landings2019$Landings <- landings2019$Landings/1000
+# 
+# landings2020 <- aggregate(CATON~Area+Country, 
+#                           data = ic_clean[ic_clean$Year == "2020" & ic_clean$CatchCategory != "Discards", ],
+#                           FUN = sum)
+# landings2020$Year <- as.factor(as.character(2020))
+# names(landings2020)[names(landings2020) == "CATON"] <- "Landings"
+# 
+# landings2021 <- aggregate(CATON~Area+Country, 
+#                           data = ic_clean[ic_clean$Year == "2021" & ic_clean$CatchCategory != "Discards", ],
+#                           FUN = sum)
+# landings2021$Year <- as.factor(as.character(2021))
+# names(landings2021)[names(landings2021) == "CATON"] <- "Landings"
+
+# HistLand <- rbind(HistLand_raw, landings2018, landings2019, landings2020, landings2021)
+HistLand <- rbind(HistLand_raw, landings)
+getwd()
+
+rm(list = c("HistLand_raw", "landings"))
+#=====
+
+k <- append(k, c("HistLand"))
+```
+
+Catch cohort matrices are set up according to the annually updated intercatch output (hidden chunk).
+*This section needs to be updated so that the catch numbers at age are generated automagically with R, to remove the excel step*
+```{r}
+# Define the years and number of cohorts
+year_range <- 1992:DataYear
+num_cohorts <- length(year_range)
+
+# Initialize the dataframe with NA values
+catchcohorts <- data.frame(Year = year_range, matrix(NA, nrow = num_cohorts, ncol = num_cohorts))
+colnames(catchcohorts)[2:(num_cohorts + 1)] <- paste0("Cohort", 1:num_cohorts)
+
+# Fill the dataframe with cohort values
+for (cohort in 1:num_cohorts) {
+  for (age in 1:10) {
+    year_index <- age + cohort - 1
+    if (year_index <= num_cohorts) {
+      catchcohorts[year_index, cohort + 1] <- age
+    }
+  }
+}
+catchcohorts$Year <- as.factor(as.character(catchcohorts$Year))
+
+
+catchNum <- read.csv(file = "DataIn/CatchData/ple.27.21-32_CatchNumAge_2002_DataYear.csv", header = T) 
+catchNum$Year <- as.factor(as.character(catchNum$Year))
+k <- append(k, c("catchcohorts", "catchNum"))
+```
+  
+
+### Landings - Results 
+  In more recent history, observers and other sampling programmes have been able to provide estimates of discarded portions of catch.  Below we consider only the landings for the period when catch was divided into landings & discards.
+```{r fig.cap= "Recent history landings by country"}
+#===
+# Figure 3 Short term Landings by country
+#====
+IC_agg_temp <- aggregate(CATON~Year+Country,
+                     data = ic_clean[ic_clean$CatchCategory == "Landings", ],
+                     FUN = sum)
+IC_agg_temp$Country <- factor(IC_agg_temp$Country, levels = c("Sweden", "Germany", "Denmark", "Poland", "Latvia", "Lithuania", "Estonia", "Finland"))
+# IC_agg_temp$CATON <- IC_agg_temp$CATON.kg/1000
+
+plt_land_ctry <- ggplot(data = IC_agg_temp,
+                            aes(x = Year,
+                                y = CATON,
+                                group = Country,
+                                fill = Country)) +
+  stat_summary(fun.y = sum, geom = "area", position = "stack", na.rm = TRUE) +
+  ylab("Landings (t)") +
+  theme_clean()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  scale_fill_manual(values = c("#004B87","#000000", "#C60C30", ebpal))
+ggplotly(plt_land_ctry)
+#====
+```
+
+We can also interrogate the landings relative to the TACs for the respective management areas that this stock straddles. Namely the North Sea management area in SD21 (Kattegat), and the Baltic Sea management area covering the remainder of the stock; SD22-32.
+```{r eval=TRUE, fig.cap= "Recent history landings for the North Sea Management area in subdivision 21"}
+#===
+# Figure 4 Landings and TAC by MgmtArea
+#====
+IC_agg_temp <- aggregate(CATON~Year+Country+MgmtArea,
+                         data = ic_clean[ic_clean$CatchCategory == "Landings" & ic_clean$Area == "27.3.a.21", ],
+                         FUN = sum)
+IC_agg_temp$Country <- factor(IC_agg_temp$Country, levels = c("Sweden", "Germany", "Denmark", "Poland", "Latvia", "Lithuania", "Estonia", "Finland"))
+# IC_agg_temp$CATON <- IC_agg_temp$CATON.kg/1000
+TAC21 <- tac_raw[tac_raw$Area== "27.3.a.21" & tac_raw$Year %in% c(2002:DataYear), ]
+
+
+plt_land_21 <- ggplot() +
+  stat_summary(fun.y = sum,
+               geom = "area",
+               position = "stack",
+               na.rm = TRUE,
+               data = IC_agg_temp,
+               mapping = aes(x = Year,
+                             y = CATON,
+                             group = Country,
+                             fill = Country)) +
+  geom_line(data = TAC21,
+            mapping = aes(x = Year,
+                          y = TAC,
+                          group = Area,
+                          colour = Area),
+            size = 2) +
+  # facet_wrap("MgmtArea", ncol = 2, scales = "free_y") +
+  ylab("Landings (kg)") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  theme_clean() +
+  scale_fill_manual(values = c("#004B87","#000000", "#C60C30", ebpal))+
+  scale_colour_manual(values = c("#7570b3"))
+
+style(ggplotly(plt_land_21), showlegend = FALSE)
+#=====
+```
+
+```{r eval=FALSE, fig.cap= "Recent history landings for subdivision 22"}
+#===
+# Figure 5 Landings in 22
+#====
+IC_agg_temp <- aggregate(CATON~Year+Country,
+                         data = ic_clean[ic_clean$CatchCategory != "Discards" & ic_clean$Area == "27.3.c.22", ],
+                         FUN = sum)
+IC_agg_temp$Country <- factor(IC_agg_temp$Country, levels = c("Sweden", "Germany", "Denmark"))
+# IC_agg_temp$CATON <- IC_agg_temp$CATON.kg/1000
+TAC22 <- tac_raw[tac_raw$Area== "27.3.c.22" & tac_raw$Year %in% c(2002:DataYear), ]
+
+plt_land_22 <- ggplot() +
+  stat_summary(fun.y = sum,
+               geom = "area",
+               position = "stack",
+               na.rm = TRUE,
+               data = IC_agg_temp,
+               mapping = aes(x = Year,
+                             y = CATON,
+                             group = Country,
+                             fill = Country)) +
+  geom_line(data = TAC22,
+            mapping = aes(x = Year,
+                          y = TAC,
+                          group = Area),
+            size = 2,
+            colour = "#7570b3") +
+  ylab("Landings (kg)") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  scale_fill_manual(values = c("#004B87","#000000", "#C60C30"))
+
+#====
+```
+
+```{r eval=FALSE, fig.cap= "Recent history landings for subdivision 23"}
+#===
+# Figure 6 Landings in 23
+#====
+IC_agg_temp <- aggregate(CATON~Year+Country,
+                         data = ic_clean[ic_clean$CatchCategory != "Discards" & ic_clean$Area == "27.3.b.23", ],
+                         FUN = sum)
+IC_agg_temp$Country <- factor(IC_agg_temp$Country, levels = c("Sweden", "Germany", "Denmark"))
+# IC_agg_temp$CATON <- IC_agg_temp$CATON.kg/1000
+TAC23 <- tac_raw[tac_raw$Area== "27.3.b.23" & tac_raw$Year %in% c(2002:DataYear), ]
+
+plt_land_23 <- ggplot() +
+  stat_summary(fun.y = sum,
+               geom = "area",
+               position = "stack",
+               na.rm = TRUE,
+               data = IC_agg_temp,
+               mapping = aes(x = Year,
+                             y = CATON,
+                             group = Country,
+                             fill = Country)) +
+  geom_line(data = TAC23,
+            mapping = aes(x = Year,
+                          y = TAC,
+                          group = Area),
+            size = 2,
+            colour = "#7570b3") +
+  ylab("Landings (kg)") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  scale_fill_manual(values = c("#004B87", "#C60C30"))
+
+#====
+```
+
+```{r eval=TRUE, fig.cap= "Recent history landings for the Baltic Sea Management area in subdivisions 22-32"}
+#===
+# Figure 5 Landings in 22:32
+#====
+IC_agg_temp <- aggregate(CATON~Year+Country,
+                         data = ic_clean[ic_clean$CatchCategory == "Landings" & ic_clean$Area != "27.3.a.21", ],
+                         FUN = sum)
+IC_agg_temp$Country <- factor(IC_agg_temp$Country, levels = c("Sweden", "Germany", "Denmark", "Poland", "Latvia", "Lithuania", "Estonia", "Finland"))
+# IC_agg_temp$CATON <- IC_agg_temp$CATON.kg/1000
+TAC22 <- tac_raw[tac_raw$Area== "ple.27.22-32" & tac_raw$Year %in% c(2002:DataYear), ]
+
+plt_land_22_32 <- ggplot() +
+  stat_summary(fun.y = sum,
+               geom = "area",
+               position = "stack",
+               na.rm = TRUE,
+               data = IC_agg_temp,
+               mapping = aes(x = Year,
+                             y = CATON,
+                             group = Country,
+                             fill = Country)) +
+  geom_line(data = TAC22,
+            mapping = aes(x = Year,
+                          y = TAC,
+                          group = MgmtArea,
+                          colour = MgmtArea),
+            size = 2) +
+  ylab("Landings (kg)") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  theme_clean() +
+  scale_fill_manual(values = c("#004B87","#000000", "#C60C30", ebpal)) +
+  scale_colour_manual(values = "#7570b3")
+  
+style(ggplotly(plt_land_22_32), showlegend = FALSE)
+#====
+```
+
+```{r eval=TRUE, fig.cap= "Landings in management areas, by country.  SD21 has it's own TAC (purple lines), while SDs 22 and above share a TAC across all SDs (22:32)."}
+#===
+# Figure 7 Landings in all areas by country
+#====
+IC_agg_temp <- aggregate(CATON~Year+Country+Area+MgmtArea,
+                         data = ic_clean[ic_clean$CatchCategory != "Discards", ],
+                         FUN = sum)
+IC_agg_temp$Country <- factor(IC_agg_temp$Country, levels = c("Sweden", "Germany", "Denmark", "Poland", "Latvia", "Lithuania", "Estonia", "Finland"))
+# IC_agg_temp$CATON <- IC_agg_temp$CATON.kg/1000
+# TACall <- tac_raw[tac_raw$Year %in% c(2002:DataYear),]
+TAC21 <- tac_raw[tac_raw$Area== "27.3.a.21" & tac_raw$Year %in% c(2002:DataYear+2), ]
+TAC22 <- tac_raw[tac_raw$Area == "ple.27.22-32" & tac_raw$Year %in% c(2002:DataYear+2), ]
+
+
+plt_land_all <- ggplot() +
+  stat_summary(fun.y = sum,
+               geom = "area",
+               position = "stack",
+               na.rm = TRUE,
+               # data = IC_agg_temp[IC_agg_temp$Area %in% c("27.3.a.21", "27.3.b.23", "27.3.c.22", "27.3.d.24", "27.3.d.25"),],
+               data = IC_agg_temp,
+               mapping = aes(x = Year,
+                             y = CATON,
+                             group = Country,
+                             fill = Country)) +
+  # geom_line(data = TAC21[TAC21$Area %in% c("27.3.a.21", "27.3.b.23", "27.3.c.22", "27.3.d.24", "27.3.d.25"),],
+  geom_line(data = tac_raw[tac_raw$Year %in% c(2002:DataYear+2),],
+            mapping = aes(x = Year,
+                          y = TAC,
+                          group = MgmtArea),
+            # size = 2,
+            colour = ebpal[length(ebpal)-1]) +
+  # geom_line(data = TAC22,
+  #           mapping = aes(x = Year,
+  #                         y = TAC),
+  #           # size = 2,
+  #           colour = ebpal[length(ebpal)-2]) +
+  ylab("Landings (t)") +
+  theme_clean()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  scale_fill_manual(values = c("#004B87","#000000", "#C60C30", ebpal)) +
+  facet_grid(rows = vars(MgmtArea))#, scales = "free_y")
+
+style(ggplotly(plt_land_all), showlegend = FALSE)
+#====
+```
+
+```{r fig.cap= "Recent history landings split by active and passive gears"}
+#===
+# Figure of landings by gear type
+#====
+IC_agg_temp <- aggregate(CATON~CatchCategory+Fleet+Year,
+                         data = ic_clean,
+                         FUN = sum)
+
+plt_land_gear <- ggplot(data = IC_agg_temp[IC_agg_temp$CatchCategory == "Landings",],
+                       aes(x = Year,
+                           y = CATON,
+                           group = Fleet,
+                           fill = Fleet)) +
+  stat_summary(fun.y = sum, geom = "area", position = "stack", na.rm = TRUE) +
+  ylab("Landings (Tons)") +
+  theme_clean()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  scale_fill_manual(values = ebpal[1:length(unique(IC_agg_temp$Fleet))])
+
+style(ggplotly(plt_land_gear), showlegend = FALSE)
+```
+
+### Commercial Catches - Results
+#### Catch Volume (Mass)
+Catches for the year `r DataYear` are summarised across different factors below and are given in tonnes.
+
+```{r TotalCatchAndPropPerArea}
+IC_agg_temp <- aggregate(CATON~Area,
+                         data = ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Landings", "Discards"),],
+                         FUN = sum)
+
+Proportion <- numeric()
+for(i in IC_agg_temp$Area){
+  Proportion <- append(x = Proportion, values = IC_agg_temp[IC_agg_temp$Area == i, "CATON"]/sum(IC_agg_temp[, "CATON"]))
+}
+IC_agg_temp <- cbind(IC_agg_temp, Proportion)
+
+kable(IC_agg_temp,
+      caption = paste0("Total commercial catch and proportion of catch of plaice, per area in ", DataYear, " (tonnes)."),
+      digits = 2)
+```
+
+```{r TotalCatchPerAreaAndFleet}
+kable(aggregate(CATON ~ Area+Fleet,
+                data = ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Landings", "Discards"),],
+                FUN = sum),
+      caption = paste0("Total commercial catch of plaice, per area and by fleet, in ", DataYear, " (tonnes)."),
+      digits = 2) 
+```
+
+```{r TotalCatchPerFleet2}
+kable(aggregate(CATON ~ Fleet2,
+                data = ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Landings", "Discards"),],
+                FUN = sum),
+      caption = paste0("Total commercial catch of plaice, by new fleet concept (management area * fleet), in ", DataYear, " (tonnes)."),
+      digits = 2) 
+```
+
+```{r TotalCatchPerAreaAndFleet2}
+kable(aggregate(CATON ~ Area+Fleet2,
+                data = ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Landings", "Discards"),],
+                FUN = sum),
+      caption = paste0("Total commercial catch of plaice, per area and new fleet concept (management area * fleet), in ", DataYear, " (tonnes)."),
+      digits = 2) 
+```
+
+```{r fig.cap= "Commercial catch by catch category for all areas and all countries (tonnes)."}
+#===
+# Figure Catch by catch category (all areas, all countries)
+#====
+IC_agg_temp <- aggregate(CATON~Year+CatchCategory+Area,
+                         data = ic_clean[!ic_clean$CatchCategory %in% c("BMS", "BMS landing","Logbook Registered Discard", "Catch"),],
+                         FUN = sum)
+
+plt_catchcat <- ggplot() +
+  stat_summary(fun.y = sum,
+               geom = "area",
+               position = "stack",
+               na.rm = TRUE,
+               data = IC_agg_temp,
+               mapping = aes(x = Year,
+                             y = CATON,
+                             group = CatchCategory,
+                             fill = CatchCategory)) +
+  ylab("Catch (Tons)") + 
+  theme_clean() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        strip.text = element_text(face = "bold", size = rel(0.75)),
+        strip.background = element_blank())+
+  scale_fill_manual(values = c("#1b9e77","#d95f02", "#7570b3", "grey")) +
+  ylab("Catch (t)") +
+  facet_wrap(facets = vars(Area), ncol = 2) #, scales = "free_y") +
+  
+style(ggplotly(plt_catchcat), showlegend = FALSE)
+#====
+```
+#### Catch Numbers
+We can also investigate stock structure by looking at numbers at age. 
+
+```{r figCanum, eval=FALSE}
+catchNumLng <- reshape(data = catchNum,
+                       varying = list(colnames(catchNum)[2:length((colnames(catchNum)))]),
+                       v.names = c("Number"),
+                       timevar = "Age",
+                       direction = "long")
+catchNumLng$Age <- as.factor(as.character(catchNumLng$Age))
+catchNumLng$Age <- factor(catchNumLng$Age, levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"))
+# catchNumLng$Year <- as.factor(as.character(catchNumLng$Year))
+catchNumLng$Year <- as.numeric(as.character(catchNumLng$Year))
+
+ggplotly(ggplot(catchNumLng)+
+           geom_line(mapping = aes(x = Year,
+                                   y = Number,
+                                   colour = Age,
+                                   group = Age))+
+           theme_few() +
+           scale_colour_manual(values = ebpal))
+
+```
+
+#### Discards
+Landings below minimum size (BMS landing) are estimated as part of the discards, due to expected poor reporting of official BMS landings.  This means that in the assessment, we do not use reports of BMS.   However, when reporting on BMS catch components, we must subtract official BMS landings from Discards.  Prior to 2019 (<=2018), BMS landings were reported as part of landings.   
+
+  
+```{r}
+## Aggregate catches by year and area
+IC_agg_temp <- aggregate(CATON~Year+CatchCategory+Area,
+                         data = ic_clean[ic_clean$CatchCategory %in% c("Landings", "Discards"),],
+                         FUN = sum)
+
+disrat <- as.data.frame(reshape(IC_agg_temp,
+                                idvar = c("Year","Area"),
+                                timevar = "CatchCategory",
+                                direction = "wide"))
+disrat$DiscardRatio <- disrat$CATON.Discards/(disrat$CATON.Landings+disrat$CATON.Discards)
+disrat$Area <- factor(disrat$Area, levels = c("27.3.a.21", "27.3.b.23", "27.3.c.22", "27.3.d.24", "27.3.d.25", "27.3.d.26", "27.3.d.27", "27.3.d.28", "27.3.d.28.2", "27.3.d.29", "27.3.d.30", "27.3.d.31", "27.3.d.32"))
+
+## Aggregate catches by year and fleet
+IC_agg_temp <- aggregate(CATON~Year+CatchCategory+Fleet2,
+                         data = ic_clean[ic_clean$CatchCategory %in% c("Landings", "Discards"),],
+                         FUN = sum)
+
+disratFleet <- as.data.frame(reshape(IC_agg_temp,
+                                idvar = c("Year","Fleet2"),
+                                timevar = "CatchCategory",
+                                direction = "wide"))
+disratFleet$DiscardRatio <- disratFleet$CATON.Discards/(disratFleet$CATON.Landings+disratFleet$CATON.Discards)
+
+
+rownames(disrat) <- NULL
+```
+
+
+```{r DiscardsByArea}
+kable(disrat[disrat$Year == DataYear, c("Area","DiscardRatio")],
+      caption = paste0("Discard ratios by subdivision for ", DataYear, "."),
+      digits = 3)
+```
+
+
+```{r fig.cap= paste0("Discard ratios (proportion of total commercial catch discarded) by subdivision over time.")}
+#===
+# Figures of discard ratios
+#====
+# ## Bar chart
+# plt_disrat_area <- ggplot() +
+#   geom_col(data = disrat,
+#            mapping = aes(x = Year,
+#                          y = DiscardRatio,
+#                          fill = Area),
+#            position = "dodge") +
+#   scale_fill_manual(values = ebpal) +
+#   theme_bw() +
+#   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+## Line Chart
+disrat$Year <- as.numeric(as.character(disrat$Year))
+plt_disrat_area <- ggplot() +
+  geom_line(data = disrat,
+           mapping = aes(x = Year,
+                         y = DiscardRatio,
+                         colour = Area),
+           size = 1.5,
+           position = "dodge") +
+  scale_colour_manual(values = ebpal) +
+  theme_clean() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+ggplotly(plt_disrat_area)
+#=====
+```
+
+Plaice is considered a bycatch species in the Baltic Sea Management plan. In SD21 and 22 this remains to be the case where plaice are apparently caught in nephrops (SD21) and cod (SD21&22) fisheries, with some targeted coastal fisheries (especially in SD22&23).  To further investigate the discard rates relative to landings by different fleets in the different managment areas, we can plot the two figures together.  In doing so we make the discard ratios relative to the landings scale, thus the lines in the below figure show the relative contribution of discards to the catch compared to the maximum value (i.e. not absolute discard ratios, nor linked to the y-axis units).
+```{r fig.cap= "Commercial catch as Landings (bars) and Discard Ratios as relative proportions (lines) over time by fleet and management area"}
+#===
+# Prepare data
+#====
+IC_agg_temp <- droplevels(aggregate(CATON~Year+CatchCategory+Fleet2,
+                                    data = ic_clean[ic_clean$CatchCategory == "Landings",],
+                                    FUN = sum))
+# disrat$Year <- as.factor(as.character(disrat$Year))
+disratFleet$Year <- as.numeric(as.character(disratFleet$Year))
+IC_agg_temp$Year <- as.numeric(as.character(IC_agg_temp$Year))
+
+ylim.prim <- c(0, max(range(IC_agg_temp$CATON)))
+ylim.sec <- c(0, max(range(disratFleet$DiscardRatio, na.rm = T)))
+b <- diff(ylim.prim)/diff(ylim.sec)
+a <- ylim.prim[1] - (b*ylim.sec[1])
+#=====
+
+#===
+# Figure for advice after 2021: Discard Ratios and Landings over time
+#====
+plt_catchcat <- ggplot() +
+  geom_col(data = IC_agg_temp,
+           mapping = aes(x = Year,
+                         y = CATON),
+           fill = "#002b5f") +
+  geom_line(data = disratFleet,
+            mapping = aes(x = Year,
+                          y = a + DiscardRatio*b),
+            colour = "#ed5f26",
+            size = 1.5) +
+  scale_y_continuous("Landings (tonnes)", sec.axis = sec_axis(~ (. - a)/b, name = "Discard Ratio")) +
+  theme_clean() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        axis.line.y.right = element_line(color = "#ed5f26"), 
+        axis.ticks.y.right = element_line(color = "#ed5f26"),
+        axis.text.y.right = element_text(color = "#ed5f26"), 
+        axis.title.y.right = element_text(color = "#ed5f26"),
+        axis.line.y.left = element_line(color = "#002b5f"), 
+        axis.ticks.y.left = element_line(color = "#002b5f"),
+        axis.text.y.left = element_text(color = "#002b5f"), 
+        axis.title.y.left = element_text(color = "#002b5f")) +
+  facet_grid(rows = vars(Fleet2))
+ggplotly(plt_catchcat)
+#=====
+
+```
+  
+In subdivisions 22, 24 & 25, the collapse of the cod fishery from the period 2015 onward, appears to show a greater retention of Plaice, while fishers were still targetting cod. Subsequently, as fishing opportunities for cod collapsed, the fisher for plaice also collapsed.  This could be due to the lower overall effort, with a specific interest in what cod is available, or it could be due to the explosion in the plaice population. In the latter case, plaice are both caught more easily, while remaining unwanted, and their condition has been deteriorating, meaning a higher proportion of the catch is not marketable. Below we focus on SD22 and how catches and discard ratios have developed together over time.
+```{r fig.cap= "Discard Ratios (lines) and Landings (bars) over time in SD22 - the SW Baltic"}
+#===
+# Prepare data
+#====
+IC_agg_temp <- droplevels(aggregate(CATON~Year+CatchCategory+Area,
+                                    data = ic_clean[ic_clean$Area == "27.3.c.22" & ic_clean$CatchCategory == "Landings",],
+                                    FUN = sum))
+# disrat$Year <- as.factor(as.character(disrat$Year))
+disrat$Year <- as.numeric(as.character(disrat$Year))
+IC_agg_temp$Year <- as.numeric(as.character(IC_agg_temp$Year))
+
+disrat <- disrat[disrat$Area == "27.3.c.22",]
+
+ylim.prim <- c(0, max(range(IC_agg_temp$CATON)))
+ylim.sec <- c(0, max(range(disrat$DiscardRatio)))
+b <- diff(ylim.prim)/diff(ylim.sec)
+a <- ylim.prim[1] - (b*ylim.sec[1])
+#=====
+
+#===
+# Figure of landings and discard ratios over time
+#====
+plt_catchcat <- ggplot() +
+  geom_col(data = IC_agg_temp,
+           mapping = aes(x = Year,
+                         y = CATON),
+           fill = "#002b5f") +
+  geom_line(data = disrat,
+            mapping = aes(x = Year,
+                          y = a + DiscardRatio*b),
+            colour = "#ed5f26",
+            size = 1.5) +
+  scale_y_continuous("Landings (tonnes)", sec.axis = sec_axis(~ (. - a)/b, name = "Discard Ratio")) +
+  theme_clean() +
+  theme(axis.text = element_text(size = 20),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        axis.line.y.right = element_line(color = "#ed5f26"), 
+        axis.ticks.y.right = element_line(color = "#ed5f26"),
+        axis.text.y.right = element_text(color = "#ed5f26"), 
+        axis.title.y.right = element_text(color = "#ed5f26"),
+        axis.line.y.left = element_line(color = "#002b5f"), 
+        axis.ticks.y.left = element_line(color = "#002b5f"),
+        axis.text.y.left = element_text(color = "#002b5f"), 
+        axis.title.y.left = element_text(color = "#002b5f"))
+
+ggplotly(plt_catchcat)
+#=====
+```
+
+These same trends are mirrored in the discard rates by country, where vessels mainly operating in 21 (i.e. Sweden) have the highest rates, those operating mainly in the Baltic (i.e. Poland and Germany) the lowest, and those operating in both have an intermediate level of discards (i.e. Denmark).
+```{r fig.cap= "Discard ratios (proportion of total catch discarded) by country over time"}
+#===
+# Prep data
+#====
+IC_agg_temp <- aggregate(CATON~Year+CatchCategory+Country,
+                         data = ic_clean[ic_clean$CatchCategory %in% c("Landings", "Discards"),],
+                         FUN = sum)
+
+disrat <- as.data.frame(reshape(IC_agg_temp,
+                                idvar = c("Year","Country"),
+                                timevar = "CatchCategory",
+                                direction = "wide"))
+# disrat[is.na(disrat$CATON.BMS), "CATON.BMS"] <- 0
+disrat$DiscardRatio <- disrat$CATON.Discards/(disrat$CATON.Landings+disrat$CATON.Discards)
+disrat$Country <- factor(disrat$Country, levels = c("Sweden", "Germany", "Denmark", "Poland", "Latvia", "Lithuania", "Estonia", "Finland"))
+disrat$Year <- as.numeric(as.character(disrat$Year))
+#=====
+
+#===
+# Figure Discard Ratios by Country
+#====
+plt_disrat_country <- ggplot() +
+  geom_line(data = disrat,
+           mapping = aes(x = Year,
+                         y = DiscardRatio,
+                         colour = Country),
+           size = 1.5) +
+  theme_clean() +
+  scale_colour_manual(values = c("#004B87","#000000", "#C60C30", ebpal))
+ggplotly(plt_disrat_country)
+#====
+```
+
+Drilling down into a bit more detail we can see where (subdivision), when (quarter) and by which general gear types the majority of catches (discards & landings) are taken. 
+```{r fig.cap= "Discards and landings from Current year by quarter and gear", out.height='80%'}
+#===
+# Figure Discards/landings of DataYear by quarter and gear
+#====
+IC_agg_temp <- aggregate(CATON~Season+CatchCategory+Area+Fleet,
+                         # data = ic_clean[ic_clean$Year == DataYear & ic_clean$Fleet %in% c("Active", "Passive"), ],
+                         data = ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Discards", "Landings"), ],
+                         FUN = sum)
+IC_agg_temp <- droplevels(IC_agg_temp)
+#=====
+
+#===
+# Figure Discards/landings of DataYear by quarter and gear
+#====
+plt_disrat_Q_area <- ggplot() +
+  geom_col(data = IC_agg_temp,
+           mapping = aes(x = Season, 
+                         y = CATON,
+                         fill = CatchCategory)) + 
+  facet_grid(rows = vars(Area),
+             cols = vars(Fleet),
+             scales = "free_y") +
+  theme_clean() +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(size = rel(0.75))) +
+  scale_fill_manual(values = ebpal) +
+  xlab("Quarter") +
+  ylab("Catch (t)")
+
+style(ggplotly(plt_disrat_Q_area), showlegend = FALSE)
+#====
+```
+
+```{r catchesByCategoryByFleetOverQuarters}
+#===
+# Figure Discards/landings of DataYear by quarter and gear
+#====
+IC_agg_temp <- aggregate(CATON~Area+CatchCategory+Fleet+Season,
+                         # data = ic_clean[ic_clean$Year == DataYear & ic_clean$Fleet %in% c("Active", "Passive"), ],
+                         data = ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Discards", "Landings"), ],
+                         FUN = sum)
+IC_agg_temp <- droplevels(IC_agg_temp)
+#=====
+
+#===
+# Reshape to make Quarters wide
+#====
+IC_agg_temp <- reshape(IC_agg_temp,
+                       direction = "wide",
+                       idvar = c("Area", "CatchCategory", "Fleet"),
+                       timevar = "Season")
+colnames(IC_agg_temp) <- c("Subdivision", "CatchCategory", "Fleet", "Q1", "Q2", "Q3", "Q4")
+IC_agg_temp <- IC_agg_temp[order(IC_agg_temp$Subdivision, IC_agg_temp$CatchCategory, IC_agg_temp$Fleet), ]
+rownames(IC_agg_temp) <- NULL
+#=====
+
+kable(IC_agg_temp,
+      caption = paste0("Commercial catch from ple.27.21-23 in ", DataYear, " by catch category, by fleet and over quarters (tonnes)."),
+      digits = 0)
+
+```
+
+Furthermore, we can split the discard rates by our new fleet concept, that of fleets by management area.  This way different discard rates in different managemetn areas can be taken into consideration when setting TACs and other management devices. 
+```{r fig.cap= "Discard ratios (proportion of total commercial catch discarded) by management area and fleet, over time"}
+#===
+# Prep data
+#====
+IC_agg_temp <- aggregate(CATON~Year+CatchCategory+Fleet2,
+                         data = ic_clean[ic_clean$CatchCategory %in% c("Landings", "Discards"),],
+                         FUN = sum)
+
+disrat <- as.data.frame(reshape(IC_agg_temp,
+                                idvar = c("Year","Fleet2"),
+                                timevar = "CatchCategory",
+                                direction = "wide"))
+# disrat[is.na(disrat$CATON.BMS), "CATON.BMS"] <- 0
+disrat$DiscardRatio <- disrat$CATON.Discards/(disrat$CATON.Landings+disrat$CATON.Discards)
+disrat$Fleet2 <- factor(disrat$Fleet2, levels = c("NS_Active", "NS_Passive", "BS_Active", "BS_Passive"))
+disrat$Year <- as.numeric(as.character(disrat$Year))
+#=====
+
+#===
+# Figure Discard Ratios by Country
+#====
+plt_disrat_fleet <- ggplot() +
+  geom_line(data = disrat,
+           mapping = aes(x = Year,
+                         y = DiscardRatio,
+                         colour = Fleet2),
+           size = 1.5,
+           position = "dodge") +
+  theme_clean() +
+  # facet_grid(Country~.) +
+  scale_colour_manual(values = ebpal)
+ggplotly(plt_disrat_fleet)
+#====
+```
+
+```{r totaldiscards}
+#===
+# Data agreggation
+#====
+IC_agg_temp <- aggregate(CATON~Year+CatchCategory,
+                         data = ic_clean,
+                         FUN = sum)
+
+disrat <- as.data.frame(reshape(IC_agg_temp,
+                                idvar = c("Year"),
+                                timevar = "CatchCategory",
+                                direction = "wide"))
+disrat[is.na(disrat$CATON.BMS), "CATON.BMS"] <- 0
+disrat$DiscardRatio <- disrat$CATON.Discards/(disrat$CATON.Landings+disrat$CATON.Discards)
+mdr <- median(disrat$DiscardRatio, na.rm = T)
+mdr3 <- mean(disrat[disrat$Year %in% c((DataYear-2):(DataYear)), "DiscardRatio"], na.rm = T)
+#=====
+
+
+```
+  
+The general time trends for the whole stock are of less interest but are included in the report as a time series.  The median of the time series is `r mdr`.  The mean discard rate for the prior three years is `r mdr3`.
+
+```{r fig.cap= "Annual discard ratio for the total stock over time. Orange line represents median of the time series."}
+#===
+# Discard Ratios all together
+#====
+plt_disrat <- ggplot() +
+  geom_point(data = disrat,
+           mapping = aes(x = Year,
+                         y = DiscardRatio),
+           colour = ebpal[1]) +
+  geom_line(data = disrat,
+           mapping = aes(x = Year,
+                         y = DiscardRatio,
+                         group = 1),
+           colour = ebpal[2]) +
+  geom_hline(mapping = aes(yintercept = mdr),
+             colour = ebpal[3]) +
+  theme_clean() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+ggplotly(plt_disrat)
+
+#====
+```
+
+
+### Catches - advice sheet requirements
+The advice sheets require specific information which is presented below
+```{r CatchLandingDiscardDataYear, eval=FALSE}
+#===
+# Aggregate catches in a format for use in the stock splitting table
+#====
+IC_agg_temp <- aggregate(CATON~CatchCategory+Area,
+                         data = ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Landings", "Discards"),],
+                         FUN = "sum")
+IC_agg_temp <- reshape(IC_agg_temp, direction = "wide", idvar = "Area", timevar = "CatchCategory")
+IC_agg_temp[is.na(IC_agg_temp$CATON.Discards), "CATON.Discards"] <- 0
+IC_agg_temp$Catch <- IC_agg_temp$CATON.Discards + IC_agg_temp$CATON.Landings
+rownames(IC_agg_temp) <- NULL
+#=====
+
+kable(IC_agg_temp,
+      caption = paste0("Catches by catch category and subdivision in ", DataYear, " (tonnes). _Used for the stock splitting table_."),
+      digits = 2)
+```
+
+- The catch from subdivisions 21, 22 & 23 combined in `r (DataYear)` was `r sum(ic_clean[ic_clean$Year == DataYear, "CATON"])` tonnes.  
+- The landings from subdivisions 21, 22 & 23 combined in `r (DataYear)` was `r sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Landings", "CATON"])` tonnes.  
+  - The percentage of landings that were taken in _active_ gears was `r ((sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Landings" & ic_clean$Fleet == "Active", "CATON"]))/(sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Landings", "CATON"])))*100`%. 
+  - The percentage of landings that were taken in _passive_ gears was `r ((sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Landings" & ic_clean$Fleet == "Passive", "CATON"]))/(sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Landings", "CATON"])))*100`%.  
+- The discards from subdivisions 21, 22 & 23 combined in `r (DataYear)` was `r sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Discards", "CATON"])` tonnes.  
+
+
+The _History of commercial catch and landings_ table in the advice sheet requires that BMS official landings are subtracted from the discard values. _Need to determine the advice sheet resolution requirements (by stock, by management area, by subdivision etc.) before reworking this code to fit._
+```{r manualCatchCalcs, eval=FALSE}
+#===
+# Aggregate and format Landings and Discards
+#====
+IC_agg_temp <- aggregate(CATON~Area+CatchCategory+Country, data = ic_clean[ic_clean$Year == DataYear, ], FUN = "sum")
+adctchtble <- reshape(data = IC_agg_temp[IC_agg_temp$CatchCategory %in% c("Landings", "Discards"),], direction = "wide",
+                      timevar = "Area",
+                      idvar = c("CatchCategory", "Country"))
+# adctchtble[is.na(adctchtble$CATON.27.3.a.21), "CATON.27.3.a.21"] <- 0
+# adctchtble[is.na(adctchtble$CATON.27.3.b.23), "CATON.27.3.b.23"] <- 0
+# adctchtble[is.na(adctchtble$CATON.27.3.c.22), "CATON.27.3.c.22"] <- 0
+adctchtble <- data.table::transpose(adctchtble)
+colnames(adctchtble) <- c("DK_Discards", "DK_Landings", "DE_Discards", "DE_Landings", "SK_Discards", "SK_Landings")
+adctchtble <- adctchtble[3:5, ]
+adctchtble <- as.data.frame(lapply(adctchtble, FUN = "as.numeric"))
+#====
+
+#===
+# Aggregate and format BMS Landings
+#====
+IC_agg_temp1 <- aggregate(OfficialLandings.kg~Area+CatchCategory+Country, data = ic_clean[ic_clean$Year == DataYear, ], FUN = "sum")
+adbmstble <- reshape(data = IC_agg_temp1[IC_agg_temp1$CatchCategory %in% c("BMS landing"), ], direction = "wide",
+                      timevar = "Area",
+                      idvar = c("CatchCategory", "Country"))
+
+# adbmstble[is.na(adbmstble$OfficialLandings.kg.27.3.a.21), "OfficialLandings.kg.27.3.a.21"] <- 0
+# adbmstble[is.na(adbmstble$OfficialLandings.kg.27.3.b.23), "OfficialLandings.kg.27.3.b.23"] <- 0
+# adbmstble[is.na(adbmstble$OfficialLandings.kg.27.3.c.22), "OfficialLandings.kg.27.3.c.22"] <- 0
+adbmstble <- data.table::transpose(adbmstble)
+colnames(adbmstble) <- c("DK_BMS", "DE_BMS", "SK_BMS")
+adbmstble <- adbmstble[3:5, ]
+adbmstble <- as.data.frame(lapply(adbmstble, FUN = "as.numeric"))
+
+## Convert from kg to tonnes
+adbmstble <- adbmstble/1000
+#=====
+#===
+# Combine, subtract BMS from Discards & Restructure
+#====
+## Combine
+adctchtble <- cbind(adctchtble, adbmstble)
+
+## Replace NAs with zeros for accurate arithmetic
+adctchtble[is.na(adctchtble)] <- 0
+
+## Subtract BMS from discards
+adctchtble$DK_Discards <- adctchtble$DK_Discards - adctchtble$DK_BMS
+adctchtble$DE_Discards <- adctchtble$DE_Discards - adctchtble$DE_BMS
+adctchtble$SK_Discards <- adctchtble$SK_Discards - adctchtble$SK_BMS
+
+## Calculate total catch
+IC_agg_temp <- aggregate(CATON~Area, data = ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Landings", "Discards"), ], FUN = "sum")
+adctchtble$TotalCatch <- IC_agg_temp$CATON
+
+## Add subdivision information
+adctchtble$Subdivision <- unique(IC_agg_temp$Area)
+
+## Aggregate BMS across all countries
+adctchtble$BMS <- rowSums(adctchtble[, c("DK_BMS", "DE_BMS", "SK_BMS")], na.rm = TRUE)
+
+## Reformat
+adctchtble <- adctchtble[, c("Subdivision", "DK_Discards", "DK_Landings", "DE_Discards", "DE_Landings",  "SK_Discards", "SK_Landings", "BMS", "TotalCatch")]
+#=====
+
+#===
+# Add Annual Totals
+#====
+tots <- adctchtble[0,]
+for(i in 2:ncol(tots)){
+  tots[1,i] <- sum(adctchtble[, i], na.rm = TRUE)
+}
+tots$Subdivision <- as.character(DataYear)
+
+adctchtble <- rbind(tots, adctchtble)
+rownames(adctchtble) <- NULL
+#=====
+
+
+
+kable(adctchtble,
+      caption = paste0("Official catch numbers by country and subdivision for ", DataYear, ".  Official landings of BMS have been subtracted from Discards. _can be copy-pasted into the advice sheet_."),
+      digits = 0)
+
+```
+
+### Commercial Sampling Coverage
+Not all trips have observers or electronic monitoring to enable measurements of discard rates, or the sampling of all strata of fisheries for biological information.  Therefore, raising is carried out to match unsampled strata with those where we have observations (this is currently done in intercatch). Each year, different portions of the fishery are sampled and to varying degrees, therefore there is no hard and fast rule about which strata should be matched. Rather, there are a set of priorities by which we try to match unsampled strata to sampled strata.  These can be found in the stock annex. Below we explore the level of sampling coverage across the different strata for `r DataYear` (using tonnage per category to derive proportions).  Generally, this plaice stock is well covered by sampling and there are a minority of catches for which data are matched and assumptions are made.  
+
+```{r SamplingCoverageCalcs}
+#===
+# Data wrangling and calculation of Raised/imported sampled/Estimated catches for Current Year
+#====
+datacoverage_DY <- aggregate(CATON~CatchCategory+CATONRaisedOrImported+SampledOrEstimated,
+                             data = ic_clean[ic_clean$Year == DataYear,],
+                             FUN = sum)
+lnd_DY <- sum(datacoverage_DY[datacoverage_DY$CatchCategory == "Landings", "CATON"])
+disc_DY <- sum(datacoverage_DY[datacoverage_DY$CatchCategory %in% c("Discards"), "CATON"])
+
+datacoverage_DY$Proportion <- NA
+datacoverage_DY[datacoverage_DY$CatchCategory == "Landings" & datacoverage_DY$SampledOrEstimated == "Sampled_Distribution", "Proportion"] <- datacoverage_DY[datacoverage_DY$CatchCategory == "Landings" & datacoverage_DY$SampledOrEstimated == "Sampled_Distribution", "CATON"]/lnd_DY
+datacoverage_DY[datacoverage_DY$CatchCategory == "Landings" & datacoverage_DY$SampledOrEstimated == "Estimated_Distribution", "Proportion"] <- datacoverage_DY[datacoverage_DY$CatchCategory == "Landings" & datacoverage_DY$SampledOrEstimated == "Estimated_Distribution", "CATON"]/lnd_DY
+
+datacoverage_DY[datacoverage_DY$CatchCategory == "Discards" & datacoverage_DY$SampledOrEstimated == "Sampled_Distribution" & datacoverage_DY$CATONRaisedOrImported == "Imported_Data", "Proportion"] <- datacoverage_DY[datacoverage_DY$CatchCategory == "Discards" & datacoverage_DY$SampledOrEstimated == "Sampled_Distribution" & datacoverage_DY$CATONRaisedOrImported == "Imported_Data", "CATON"]/disc_DY
+datacoverage_DY[datacoverage_DY$CatchCategory == "Discards" & datacoverage_DY$SampledOrEstimated == "Estimated_Distribution" & datacoverage_DY$CATONRaisedOrImported == "Imported_Data", "Proportion"] <- datacoverage_DY[datacoverage_DY$CatchCategory == "Discards" & datacoverage_DY$SampledOrEstimated == "Estimated_Distribution" & datacoverage_DY$CATONRaisedOrImported == "Imported_Data", "CATON"]/disc_DY
+datacoverage_DY[datacoverage_DY$CatchCategory == "Discards" & datacoverage_DY$SampledOrEstimated == "Estimated_Distribution" & datacoverage_DY$CATONRaisedOrImported == "Raised_Discards", "Proportion"] <- datacoverage_DY[datacoverage_DY$CatchCategory == "Discards" & datacoverage_DY$SampledOrEstimated == "Estimated_Distribution" & datacoverage_DY$CATONRaisedOrImported == "Raised_Discards", "CATON"]/disc_DY
+
+datacoverage_DY$Source <- paste(datacoverage_DY$SampledOrEstimated, datacoverage_DY$CATONRaisedOrImported, sep = "\n")
+datacoverage_DY$Source <- as.factor(datacoverage_DY$Source)
+datacoverage_DY$Source <- factor(datacoverage_DY$Source, levels = c("Estimated_Distribution\nRaised_Discards", "Estimated_Distribution\nImported_Data", "Sampled_Distribution\nImported_Data"))
+datacoverage_DY <- droplevels(datacoverage_DY)
+#=====
+
+```
+
+```{r fig.cap= paste0("Proportions of catch components that were sampled for biological data, and the proportion of discards that were raised by pairing with reported discard data.  Proportions are made with catch tonnage by strata (fleet, area, country, quarter) for the year ", DataYear) }
+
+#===
+# Figure of sampling coverage for DataYear
+#====
+plt_dataCover <- ggplot() +
+  geom_col(data = datacoverage_DY[!datacoverage_DY$CatchCategory %in% c("BMS", "BMS landing", "Logbook Registered Discard", "Catch"), ],
+           mapping = aes(x = CatchCategory,
+                         y = Proportion,
+                         fill = Source)) +
+  theme_clean() +
+  scale_fill_manual(values = c("#1b9e77","#d95f02", "#7570b3"))
+ggplotly(plt_dataCover)
+#=====
+```
+
+```{r dataCoverageTab}
+#===
+# Tabulate for presentation
+#====
+dcDYtab <- datacoverage_DY[datacoverage_DY$CatchCategory %in% c("Landings", "Discards"), c("CatchCategory", "Source", "CATON", "Proportion")]
+dcDYtab$InfoSource <- gsub(pattern = "\\\n", replacement = " and ", dcDYtab$Source)
+dcDYtab <- dcDYtab[dcDYtab$CatchCategory %in% c("Landings", "Discards"), c("CatchCategory", "InfoSource", "CATON", "Proportion")]
+rownames(dcDYtab) <- NULL
+dcDYtab$CATON <- round(dcDYtab$CATON, digits = 0)
+dcDYtab$Proportion <- icesRound(dcDYtab$Proportion*100, percent = TRUE, sign = FALSE)
+
+kable(dcDYtab,
+      caption = paste0("Proportions of catch components that were sampled for biological data, and the proportion of discards that were raised by pairing with reported discard data.  Proportions are made with catch tonnage by strata (fleet, area, country, quarter) for the year ", DataYear))
+#=====
+```
+
+```{r DetailedSamplingCoverageTab}
+#===
+# Data wrangling
+#====
+IC_agg_temp <- aggregate(cbind(CATON, No.of.length.sanples, No.length.mesures, No.of.age.samples, No.of.age.readings)~Area+CatchCategory+Country+Fleet,
+                         data = ic_clean[ic_clean$CatchCategory %in% c("Landings", "Discards") & ic_clean$Year == DataYear,],
+                         FUN = "sum")
+colnames(IC_agg_temp) <- c("Subdivision", "CatchCategory", "Country", "Fleet", "Catch(tonnes)", "LengthSamples", "LengthsMeasured", "AgeSamples", "AgesRead")
+samptable <- IC_agg_temp[order(IC_agg_temp$Subdivision, IC_agg_temp$CatchCategory, IC_agg_temp$Country, IC_agg_temp$Fleet), ]
+samptable$`Catch(tonnes)` <- round(samptable$`Catch(tonnes)`, digits = 3)
+#=====
+
+#===
+#
+#====
+rownames(samptable) <- NULL
+kable(samptable,
+      caption = paste0("Sampling effort in ", DataYear, " by strata."))
+
+```
+
+
+## Survey Indices
+This stock utilises data from four surveys.  A combination of 1st quarter NS-IBTS and the 1st quarter BITS on the one hand, and the combination of 3rd quarter NS-IBTS and 4th quarter BITS on the other. 
+
+Currently, these indices are generated by Casper Berg from DTU Aqua, using a method he published in 2014. An adaptation of Casper's method is in progress.
+_Description of new model and updated indices need to be provided in this section once ready._
+
+
+```{r eval=FALSE}
+# ## 2019 Q3/4 data excluded from calculation of indices
+survTun <- read.csv(file = "DataIn/ple.27.21-23_SurveyTuning_IBTS-BITS_1992-DataYear_2019Q34Excluded.csv", header = T)
+k <- append(k, "survTun")
+```
+
+```{r eval=FALSE, fig.cap= "NS-IBTS & BITS derived tuning indices for ple.27.21-23 Q1 and Q3/4."}
+#===
+# Data prep
+#====
+survTunLng <- reshape(data = survTun,
+                      varying = list(colnames(survTun)[3:length((colnames(survTun)))]),
+                      v.names = c("Index"),
+                      timevar = "Age",
+                      direction = "long")
+survTunLng$Age <- as.factor(as.character(survTunLng$Age))
+survTunLng$Year <- as.factor(as.character(survTunLng$Year))
+k <- append(k, "survTunLng")
+#=====
+
+#===
+# Figure 12 Survey Tuning Indices over time
+#====
+set.seed(5)
+plt_survTun <- ggplot() +
+  geom_line(data = survTunLng,
+            mapping = aes(x = Year,
+                          y = Index,
+                          group = Age,
+                          colour = Age),
+            size = 1.25) +
+  facet_grid(rows = vars(Survey), scales = "free_y") +
+  theme_clean() +
+  # scale_colour_manual(values = sample(ebpal, size = length(levels(survTunLng$Age)))) +
+  scale_colour_manual(values = ebpal) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 1))
+
+ggplotly(plt_survTun)
+#====
+```
+
+```{r eval=FALSE, fig.cap="Internal consistency plot for and maps of the combined Q1 surveys.  Generated by Casper Berg", out.width= "85%"}
+# include_graphics(path = paste0("../", DataYear+1, "/SurveyIndices/CasperCalculations/ICQ1.png"))
+
+#===
+# Alternate code for including multiple plots
+#====
+include_graphics(path = paste0("../", DataYear+1, "/SurveyIndices/CasperCalculations/", list.files(path = paste0("../", DataYear+1, "/SurveyIndices/CasperCalculations"), pattern = "Q1.png")))
+#=====
+```
+
+```{r eval=FALSE, fig.cap="Internal consistency plot for, and maps of the combined Q3 & Q4 surveys.  Generated by Casper Berg", out.width= "85%"}
+#===
+# Alternate code for including multiple graphics
+#====
+xmatches <- intersect(grep(pattern = ".png", x = list.files(path = paste0("../", DataYear+1, "/SurveyIndices/CasperCalculations"))),
+                      grep(pattern = "2019", x = list.files(path = paste0("../", DataYear+1, "/SurveyIndices/CasperCalculations"))))
+include_graphics(path = paste0("../", DataYear+1, "/SurveyIndices/CasperCalculations/", list.files(path = paste0("../", DataYear+1, "/SurveyIndices/CasperCalculations"))[xmatches]))
+#=====
+
+```
+  
+
+## Biological Data
+To begin with we need survey data.  These can be downloaded muliple ways from DATRAS but we need the  DATRAS Exchange files (HH, CA, HL).  The script *01_DatrasDownloads.R* downloads all exchange data for NS-IBTS and BITS surveys and saves the results as .CSV files which we can use here.
+
+### Reading, Subsetting and Cleaning
+```{r CalcsForSurveyBiologicalData, echo=FALSE, warning=FALSE, message=FALSE, error=TRUE}
+
+## Read in ICES area / subdivision layers
+SDs <- st_read(dsn = "DataIn/ICES_areas/", layer = "ICES_Areas_20160601_cut_dense_3857")
+
+# #===
+# # OPTIONAL: Update datras data by re-downloading - TAKES LONG TIME ----
+# #===
+# source(file = "Data/Surveys/01_DatrasDownloads.R")
+# #====
+
+if((file.exists("DataProcessed/Surveys/Ple.27.21-32_ca-hh.RDS") & file.exists("DataProcessed/Surveys/Ple.27.21-32_hl-hh.RDS"))){
+  ca_hh_fin_bits_ibts <- readRDS(file = "DataProcessed/Surveys/Ple.27.21-32_ca-hh.RDS")
+  hl_hh_fin_bits_ibts <- readRDS(file = "DataProcessed/Surveys/Ple.27.21-32_ca-hh.RDS")
+}else{
+  #===
+  # Read in Data ----
+  #===
+  # Read in Datras files
+  hh_ibts <- read.csv(list.files(path = readPath,
+                                 pattern = "IBTS_HH_1965_AssYear_",
+                                 full.names = TRUE)[which.max(as.Date(sub("IBTS_HH_1965_AssYear_(\\d{4}-\\d{2}-\\d{2}).csv", "\\1",
+                                                                          basename(list.files(path = readPath,
+                                                                                              pattern = "IBTS_HH_1965_AssYear_",
+                                                                                              full.names = TRUE)))))],
+                      stringsAsFactors=F)
+  ca_ibts <- read.csv(list.files(path = readPath,
+                                 pattern = "IBTS_CA_1965_AssYear_",
+                                 full.names = TRUE)[which.max(as.Date(sub("IBTS_CA_1965_AssYear_(\\d{4}-\\d{2}-\\d{2}).csv", "\\1",
+                                                                          basename(list.files(path = readPath,
+                                                                                              pattern = "IBTS_CA_1965_AssYear_",
+                                                                                              full.names = TRUE)))))],
+                      stringsAsFactors=F)
+  hl_ibts <- read.csv(list.files(path = readPath,
+                                 pattern = "IBTS_HL_1965_AssYear_",
+                                 full.names = TRUE)[which.max(as.Date(sub("IBTS_HL_1965_AssYear_(\\d{4}-\\d{2}-\\d{2}).csv", "\\1",
+                                                                          basename(list.files(path = readPath,
+                                                                                              pattern = "IBTS_HL_1965_AssYear_",
+                                                                                              full.names = TRUE)))))],
+                      stringsAsFactors=F)
+  
+  hh_bits <- read.csv(list.files(path = readPath,
+                                 pattern = "BITS_HH_1991_AssYear_",
+                                 full.names = TRUE)[which.max(as.Date(sub("BITS_HH_1991_AssYear_(\\d{4}-\\d{2}-\\d{2}).csv", "\\1",
+                                                                          basename(list.files(path = readPath,
+                                                                                              pattern = "BITS_HH_1991_AssYear_",
+                                                                                              full.names = TRUE)))))],
+                      stringsAsFactors=F)
+  ca_bits <- read.csv(list.files(path = readPath,
+                                 pattern = "BITS_CA_1991_AssYear_",
+                                 full.names = TRUE)[which.max(as.Date(sub("BITS_CA_1991_AssYear_(\\d{4}-\\d{2}-\\d{2}).csv", "\\1",
+                                                                          basename(list.files(path = readPath,
+                                                                                              pattern = "BITS_CA_1991_AssYear_",
+                                                                                              full.names = TRUE)))))],
+                      stringsAsFactors=F)
+  hl_bits <- read.csv(list.files(path = readPath,
+                                 pattern = "BITS_HL_1991_AssYear_",
+                                 full.names = TRUE)[which.max(as.Date(sub("BITS_HL_1991_AssYear_(\\d{4}-\\d{2}-\\d{2}).csv", "\\1",
+                                                                          basename(list.files(path = readPath,
+                                                                                              pattern = "BITS_HL_1991_AssYear_",
+                                                                                              full.names = TRUE)))))],
+                      stringsAsFactors=F)
+  
+  
+  # hh_ibts<-read.csv("WKBPLAICE 2024/Data/Surveys/exchange/IBTS_HH_1965_AssYear.csv",sep=",",stringsAsFactors=F)
+  # ca_ibts<-read.csv("WKBPLAICE 2024/Data/Surveys/exchange/IBTS_CA_1965_AssYear.csv",sep=",",stringsAsFactors=F)
+  # hl_ibts<-read.csv("WKBPLAICE 2024/Data/Surveys/exchange/IBTS_HL_1965_AssYear.csv",sep=",",stringsAsFactors=F)
+  # 
+  # hh_bits<-read.csv("WKBPLAICE 2024/Data/Surveys/exchange/BITS_HH_1991_AssYear.csv",sep=",",stringsAsFactors=F)
+  # ca_bits<-read.csv("WKBPLAICE 2024/Data/Surveys/exchange/BITS_CA_1991_AssYear.csv",sep=",",stringsAsFactors=F)
+  # hl_bits<-read.csv("WKBPLAICE 2024/Data/Surveys/exchange/BITS_HL_1991_AssYear.csv",sep=",",stringsAsFactors=F)
+  #====
+  
+  #===
+  # Select Plaice in ca and hl files ----
+  #===
+  ca1_ibts<-subset(ca_ibts,SpecCodeType=="T"&SpecCode==172902)
+  ca2_ibts<-subset(ca_ibts,SpecCodeType=="W"&SpecCode==127143)
+  ca_ibts<-rbind(ca1_ibts,ca2_ibts)
+  
+  hl1_ibts<-subset(hl_ibts,SpecCodeType=="T"&SpecCode==172902)
+  hl2_ibts<-subset(hl_ibts,SpecCodeType=="W"&SpecCode==127143)
+  hl_ibts<-rbind(hl1_ibts,hl2_ibts)
+  
+  ca1<-subset(ca_bits,SpecCodeType=="T"&SpecCode==172902)
+  ca2<-subset(ca_bits,SpecCodeType=="W"&SpecCode==127143)
+  ca<-rbind(ca1,ca2)
+  
+  hl1<-subset(hl_bits,SpecCodeType=="T"&SpecCode==172902)
+  hl2<-subset(hl_bits,SpecCodeType=="W"&SpecCode==127143)
+  hl<-rbind(hl1,hl2)
+  #====
+  
+  #===
+  # Add SD and Station info to IBTS ----  
+  #===
+  # Make NS-IBTS haul data spatial object
+  hh_ibts_sf <- st_as_sf(hh_ibts, coords = c("ShootLong", "ShootLat"), crs = 4326)
+  
+  # Match projections between ICES areas and Haul data 
+  SDs <- st_make_valid(st_transform(SDs, crs = st_crs(hh_ibts_sf)))
+  
+  # Join / merge the ICES spatial information with the DATRAS hauls by geometries
+  hh_ibts_sf <- st_join(x = hh_ibts_sf, y = SDs, join = st_nearest_feature, left = T)
+  
+  # reduce data to dataframe
+  hh_ibts <- st_drop_geometry(hh_ibts_sf)
+
+  # Select the rows within the relevant subdivisions
+  hh_ibts1 <- hh_ibts[hh_ibts$SubDivisio %in% as.character(c(21:32)), ]
+  
+  # Add station information to ca file
+  ca_sel_ibts<-ca_ibts[,names(ca_ibts)%in%c("Survey","Quarter","Country","Ship","Gear","StNo","HaulNo","Year","AreaCode","LngtCode","LngtClass","Sex","Maturity","PlusGr","Age","CANoAtLngt","IndWgt")]
+  hh_sel_ibts<-hh_ibts1[,names(hh_ibts1)%in%c("Survey","Quarter","Country","Ship","Gear","StNo","HaulNo","Year","Month","Day","Stratum","HaulDur","ShootLat","ShootLong","HaulLat","HaulLong","StatRec","Depth","HaulVal","DataType","SubDivisio")]
+  
+  ca_sel_ibts<-ca_sel_ibts[order(ca_sel_ibts$Year,ca_sel_ibts$Quarter,ca_sel_ibts$Country,ca_sel_ibts$Ship,ca_sel_ibts$Gear,ca_sel_ibts$StNo,ca_sel_ibts$HaulNo),]
+  hh_sel_ibts<-hh_sel_ibts[order(hh_sel_ibts$Year,hh_sel_ibts$Quarter,hh_sel_ibts$Country,hh_sel_ibts$Ship,hh_sel_ibts$Gear,hh_sel_ibts$StNo,hh_sel_ibts$HaulNo),]
+  
+  ca_hh_ibts<-merge(hh_sel_ibts,ca_sel_ibts,by=c("Survey","Quarter","Country","Ship","Gear","StNo","HaulNo","Year"),all=F)
+  
+  # write.csv(ca_hh_ibts,file="WKBPLAICE 2024/Data/Surveys/exchange/ca_hh_ibts.csv")
+  
+  # Add SD info to hl file
+  hl_sel_ibts<-hl_ibts[,names(hl_ibts)%in%c("Year","Country","Quarter","Ship","Gear","StNo","HaulNo","Sex","TotalNo","SubFactor","LngtCode","LngtClass","HLNoAtLngt")]
+  hl_sel_ibts<-hl_sel_ibts[order(hl_sel_ibts$Year,hl_sel_ibts$Quarter,hl_sel_ibts$Country,hl_sel_ibts$Ship,hl_sel_ibts$Gear,hl_sel_ibts$StNo,hl_sel_ibts$HaulNo),]
+  
+  hl_hh_ibts<-merge(hh_sel_ibts,hl_sel_ibts,by=c("Quarter","Country","Ship","Gear","StNo","HaulNo","Year"),all=F)
+  
+  # write.csv(hl_hh,file="WKBPLAICE 2024/Data/Surveys/exchange/hl_hh.csv")
+  #====
+  
+  #===
+  # Add SD and Station info to BITS ----  
+  #===
+  # Make BITS haul data spatial object
+  hh_bits_sf <- st_as_sf(hh_bits, coords = c("ShootLong", "ShootLat"), crs = 4326)
+  
+  # Match projections between ICES areas and Haul data 
+  # SDs <- ifelse(st_crs(SDs) == st_crs(hh_bits_sf), 
+  #               SDs,
+  #               st_make_valid(st_transform(SDs, crs = st_crs(hh_bits_sf))))
+  SDs <- st_make_valid(st_transform(SDs, crs = st_crs(hh_bits_sf)))
+  
+  # Join / merge the ICES spatial information with the DATRAS hauls by geometries
+  hh_bits_sf <- st_join(x = hh_bits_sf, y = SDs, join = st_nearest_feature, left = T)
+  
+  # reduce data to dataframe
+  hh_bits <- st_drop_geometry(hh_bits_sf)
+  
+  ## Select the rows within the relevant subdivisions
+  hh_bits1 <- hh_bits[hh_bits$SubDivisio %in% as.character(c(21:32)), ]
+  
+  # Add station information to ca file
+  ca_sel<-ca[,names(ca)%in%c("Survey","Quarter","Country","Ship","Gear","StNo","HaulNo","Year","AreaCode","LngtCode","LngtClass","Sex","Maturity","PlusGr","Age","CANoAtLngt","IndWgt")]
+  hh_sel<-hh_bits1[,names(hh_bits1)%in%c("Survey","Quarter","Country","Ship","Gear","StNo","HaulNo","Year","Month","Day","Stratum","HaulDur","ShootLat","ShootLong","HaulLat","HaulLong","StatRec","Depth","HaulVal","DataType","SubDivisio")]
+  
+  ca_sel<-ca_sel[order(ca_sel$Year,ca_sel$Quarter,ca_sel$Country,ca_sel$Ship,ca_sel$Gear,ca_sel$StNo,ca_sel$HaulNo),]
+  hh_sel<-hh_sel[order(hh_sel$Year,hh_sel$Quarter,hh_sel$Country,hh_sel$Ship,hh_sel$Gear,hh_sel$StNo,hh_sel$HaulNo),]
+  
+  ca_hh<-merge(hh_sel,ca_sel,by=c("Survey","Quarter","Country","Ship","Gear","StNo","HaulNo","Year"),all=F)
+  
+  # write.csv(ca_hh,file="WKBPLAICE 2024/Data/Surveys/exchange/ca_hh.csv")
+  
+  # Add SD info to hl file
+  hl_sel<-hl[,names(hl)%in%c("Year","Country","Quarter","Ship","Gear","StNo","HaulNo","Sex","TotalNo","SubFactor","LngtCode","LngtClass","HLNoAtLngt")]
+  hl_sel<-hl_sel[order(hl_sel$Year,hl_sel$Quarter,hl_sel$Country,hl_sel$Ship,hl_sel$Gear,hl_sel$StNo,hl_sel$HaulNo),]
+  
+  hl_hh<-merge(hh_sel,hl_sel,by=c("Quarter","Country","Ship","Gear","StNo","HaulNo","Year"),all=F)
+  
+  # write.csv(hl_hh,file="WKBPLAICE 2024/Data/Surveys/exchange/hl_hh.csv")
+  #====
+  
+  #===
+  # ADJUST UNITS AND CLEAN DATA ----
+  #===
+  ## Start with NS-IBTS
+  # get LngtClass in the same units. "." or "0" in LngtCode means it is in mm, "1" means it is in cm
+  # Make all in cm
+  mm_ca_ibts<-subset(ca_hh_ibts,LngtCode%in%c(".","0"))
+  cm_ca_ibts<-subset(ca_hh_ibts,LngtCode%in%c("1"))
+  
+  mm_ca_ibts$LngtClass<-mm_ca_ibts$LngtClass/10
+  ca_tmp1_ibts<-rbind(mm_ca_ibts,cm_ca_ibts)
+  
+  mm_hl_ibts<-subset(hl_hh_ibts,LngtCode%in%c(".","0"))
+  cm_hl_ibts<-subset(hl_hh_ibts,LngtCode%in%c("1"))
+  
+  mm_hl_ibts$LngtClass<-mm_hl_ibts$LngtClass/10
+  hl_tmp1_ibts<-rbind(mm_hl_ibts,cm_hl_ibts)                         # has less rows than hl_hh because some LngtCode -9
+  
+  # check whether HL needs cleaning
+  # unique(hl_tmp1_ibts$LngtClass)
+  hl_hh_fin_ibts<-hl_tmp1_ibts
+  
+  # write.csv(hl_hh_fin_ibts,file="WKBPLAICE 2024/Data/Surveys/exchange/hl_hh_fin_ibts.csv",row.names=F)
+  
+  ## BITS' Turn!
+  # get LngtClass in the same units. "." or "0" in LngtCode means it is in mm, "1" means it is in cm
+  # Make all in cm
+  mm_ca<-subset(ca_hh,LngtCode%in%c(".","0"))
+  cm_ca<-subset(ca_hh,LngtCode%in%c("1"))
+  
+  mm_ca$LngtClass<-mm_ca$LngtClass/10
+  ca_tmp1<-rbind(mm_ca,cm_ca)
+  
+  mm_hl<-subset(hl_hh,LngtCode%in%c(".","0"))
+  cm_hl<-subset(hl_hh,LngtCode%in%c("1"))
+  
+  mm_hl$LngtClass<-mm_hl$LngtClass/10
+  hl_tmp1<-rbind(mm_hl,cm_hl)                         # has less rows than hl_hh because some LngtCode -9
+  
+  # check whether HL needs cleaning
+  # unique(hl_tmp1$LngtClass)
+  hl_hh_fin<-hl_tmp1
+  
+  # write.csv(hl_hh_fin,file="WKBPLAICE 2024/Data/Surveys/exchange/hl_hh_fin.csv",row.names=F)
+  #====
+  
+  #===
+  # Calculate CPUE for records not already reported as such ----
+  ## Take into account DataType (multiply with subFactor) in HL: 
+  #===
+  ## Start with NS-IBTS.
+  #CHECK WHICH TYPES YOU HAVE:
+  # unique(hl_hh_fin_ibts$DataType)
+  
+  hl_hh_fin_ibts$HLNoAtLngt_1<-NA
+  
+  for (i in c(1:nrow(hl_hh_fin_ibts))){
+    if(hl_hh_fin_ibts$DataType[i]==as.character("C")){
+      hl_hh_fin_ibts$HLNoAtLngt_1[i]<-hl_hh_fin_ibts$HLNoAtLngt[i]
+    }
+    if(hl_hh_fin_ibts$DataType[i]==as.character("R")){
+      hl_hh_fin_ibts$HLNoAtLngt_1[i]<-(hl_hh_fin_ibts$HLNoAtLngt[i]*hl_hh_fin_ibts$SubFactor[i])*(60/hl_hh_fin_ibts$HaulDur[i])
+    }
+    if(hl_hh_fin_ibts$DataType[i]==as.character("S")){
+      hl_hh_fin_ibts$HLNoAtLngt_1[i]<-(hl_hh_fin_ibts$HLNoAtLngt[i]*hl_hh_fin_ibts$SubFactor[i])*(60/hl_hh_fin_ibts$HaulDur[i])
+    }
+    if(is.na(hl_hh_fin_ibts$DataType[i])){
+      hl_hh_fin_ibts$HLNoAtLngt_1[i]<-hl_hh_fin_ibts$HLNoAtLngt[i]  
+    }
+  }
+  
+  ## BITS' Turn!
+  # #CHECK WHICH TYPES YOU HAVE:
+  # unique(hl_hh_fin$DataType)
+  
+  hl_hh_fin$HLNoAtLngt_1<-NA
+  
+  for (i in c(1:nrow(hl_hh_fin))){
+    if(hl_hh_fin$DataType[i]==as.character("C")){   # C = Reported as CPUE
+      hl_hh_fin$HLNoAtLngt_1[i]<-hl_hh_fin$HLNoAtLngt[i]
+    }
+    if(hl_hh_fin$DataType[i]==as.character("R")){   # R = Data by Haul (could be cpue or not depending on species/survey - if CPUE then SubFactor == 1)
+      hl_hh_fin$HLNoAtLngt_1[i]<-(hl_hh_fin$HLNoAtLngt[i]*hl_hh_fin$SubFactor[i])*(60/hl_hh_fin$HaulDur[i])
+    }
+    if(hl_hh_fin$DataType[i]==as.character("S")){   # S = Subsampled haul, multiply by SubFactor which should be >1)
+      hl_hh_fin$HLNoAtLngt_1[i]<-(hl_hh_fin$HLNoAtLngt[i]*hl_hh_fin$SubFactor[i])*(60/hl_hh_fin$HaulDur[i])
+    }
+    if(is.na(hl_hh_fin$DataType[i])){
+      hl_hh_fin$HLNoAtLngt_1[i]<-hl_hh_fin$HLNoAtLngt[i]  
+    }
+  }
+  #====
+  
+  #===
+  # Clean and reshape CA data: 
+  #===
+  ## Start with NS-IBTS.
+  # Clean CA data: 
+  missing_ca_ibts <- ca_tmp1_ibts[which(ca_tmp1_ibts$LngtClass==-9|ca_tmp1_ibts$IndWgt==-9|ca_tmp1_ibts$IndWgt==0|ca_tmp1_ibts$Age==-95),]
+  missing_rows_ca_ibts <- which(ca_tmp1_ibts$LngtClass==-9|ca_tmp1_ibts$IndWgt==-9|ca_tmp1_ibts$IndWgt==0|ca_tmp1_ibts$Age==-95)
+  ca_tmp2_ibts<-ca_tmp1_ibts[-(missing_rows_ca_ibts),]  
+  
+  # CA data: add rows where CaNoLngt is larger than 1, so each row will represent one fish
+  ca_tmp2_1_ibts<-subset(ca_tmp2_ibts,CANoAtLngt==1)
+  ca_tmp2_2_ibts<-subset(ca_tmp2_ibts,CANoAtLngt>1)
+  
+  n_times_ibts<-c(ca_tmp2_2_ibts$CANoAtLngt)
+  ca_tmp2_2_adj_ibts<-ca_tmp2_2_ibts[rep(seq_len(nrow(ca_tmp2_2_ibts)), n_times_ibts),]
+  
+  ca_hh_fin_ibts<-rbind(ca_tmp2_1_ibts,ca_tmp2_2_adj_ibts)
+  
+  # # Check the data
+  # plot(ca_hh_fin_ibts$LngtClass,ca_hh_fin_ibts$IndWgt)
+  
+  ## BITS' Turn!
+  missing_ca<-ca_tmp1[which(ca_tmp1$LngtClass==-9|ca_tmp1$IndWgt==-9|ca_tmp1$IndWgt==0|ca_tmp1$Age==-95),]
+  missing_rows_ca<-which(ca_tmp1$LngtClass==-9|ca_tmp1$IndWgt==-9|ca_tmp1$IndWgt==0|ca_tmp1$Age==-95)
+  ca_tmp2<-ca_tmp1[-(missing_rows_ca),]  
+  
+  # CA data: add rows where CaNoLngt is larger than 1, so each row will represent one fish
+  ca_tmp2_1<-subset(ca_tmp2,CANoAtLngt==1)
+  ca_tmp2_2<-subset(ca_tmp2,CANoAtLngt>1)
+  
+  n_times<-c(ca_tmp2_2$CANoAtLngt)
+  ca_tmp2_2_adj<-ca_tmp2_2[rep(seq_len(nrow(ca_tmp2_2)), n_times),]
+  
+  ca_hh_fin<-rbind(ca_tmp2_1,ca_tmp2_2_adj)
+  
+  # # Number of fish in CA per year, qrt, SD
+  # nr_fish_ca<-aggregate(ca_hh_fin$CANoAtLngt,by=list(ca_hh_fin$SD,ca_hh_fin$Country,ca_hh_fin$Quarter,ca_hh_fin$Year),FUN="length")
+  
+  # #check the data
+   # plot(ca_hh_fin$LngtClass,ca_hh_fin$IndWgt)
+  #====
+  
+  #===
+  # Merge NS-IBTS & BITS
+  #===
+  ca_hh_fin_bits_ibts <- rbind(ca_hh_fin, ca_hh_fin_ibts)
+  hl_hh_fin_bits_ibts <- rbind(hl_hh_fin, hl_hh_fin_ibts)
+  
+  # Optional save for later: 
+  saveRDS(ca_hh_fin_bits_ibts, file = paste0(dataPath, "Ple.27.21-32_ca-hh.RDS"))
+  saveRDS(hl_hh_fin_bits_ibts, file = paste0(dataPath, "Ple.27.21-32_hl-hh.RDS"))
+  #====
+}
+
+#===
+# Clean up data environment
+#===
+k <- c("ca_hh_fin_bits_ibts", "hl_hh_fin_bits_ibts", "catchNum", "catchcohorts")
+r <- ls(pattern = "ca|hl|hh")[!ls(pattern = "ca|hl|hh") %in% k]
+
+rm(list = r)
+# rm(list = c("r"))
+#====
+```
+
+### Maturity Ogives (MO)
+The maturity ogives utilised in the assessment are calculated from the mean maturity at age from 2002 until the present data year.  Values are mean proportion mature at ages one through ten. 
+
+The data used to derive these maturity ogives come from quarter one of the NS-IBTS and BITS surveys, where the subsetting of relevant areas and species, as well as the merging of the two data series is carried out in the above section.  These data come from the raw DATRAS Exchange products, not the SMALK products.  This is important because we are subsetting and combining data sources, so the raising procedure needs to be done independently. 
+
+There are various ways of looking a the Maturity Ogives.  The previous Ple.27.21-23 stock used running means from the whole time-series to get single values of maturity at age, which were then applied to every year in the assessment. However, due to recent developments in the stock, age at maturity appears to be getting younger, along with other changes in biology.  Therefore, we now use a time-varying maturity ogive, based on a five-year sliding window. 
+
+Below are a series of code snippets, used to generate various types of maturity ogives. We retain these to be able to easily reproduce them, but for now we present only those that are used in the assessment.
+
+```{r MOCalcs}
+#===
+# First prepare maturity data for calculating MOs ----
+#===
+# Select data for use in this script by removing rows without relevant observations
+ca<-subset(ca_hh_fin_bits_ibts, Quarter==1 & Age!=-9 & Age!=0)
+hl<-subset(hl_hh_fin_bits_ibts, Quarter==1)
+
+# Re-code the spawning status so that they are all uniform and simplified from maturity stage to binary
+ca$spawner<-NA
+ca$nonspawner<-NA
+
+ca$spawner <- ifelse(ca$Maturity %in% c("61", "I", "1", "A", "B", "Bb"), 0,
+                     ifelse(ca$Maturity %in% c("II", "III", "IV", "IX", "M", "62", "63", "64", "65", "2", "3", "4", "5", "Ba", "C", "Ca", "Cb", "D", "Da", "Db", "E"), 1,
+                            "NA"))
+
+ca$nonspawner <- ifelse(ca$Maturity %in% c("61", "I", "1", "A", "B", "Bb"), 1,
+                        ifelse(ca$Maturity %in% c("II", "III", "IV", "IX", "M", "62", "63", "64", "65", "2", "3", "4", "5", "Ba", "C", "Ca", "Cb", "D", "Da", "Db", "E"), 0,
+                               "NA"))
+ca$spawner <- as.numeric(as.character(ca$spawner))
+ca$nonspawner <- as.numeric(as.character(ca$nonspawner))
+
+# Sort the data
+ca<-ca[order(ca$Year,ca$SubDivisio,ca$Sex,ca$Age,ca$LngtClass, ca$spawner,ca$nonspawner), ]
+
+cax <- ca[is.na(ca$spawner) & is.na(ca$nonspawner), ]
+
+# Calculate number of fish (mature or immature) by year+sex+age+LngtClass
+maturity_lngt <- aggregate(cbind(spawner, nonspawner) ~ Year+Sex+Age+LngtClass,
+                           data = ca,
+                           FUN=sum)
+#====
+
+#===
+# Calculate length frequencies from at sea observations ----
+#===
+# Establish parameters for calculations
+lencl<-c(4:60)
+age<-c(1:10)
+year<-c(1999:(DataYear+1))
+
+# Make table for length freq data
+length_freq_tmp<-by(hl,list(hl$Year,round(hl$LngtClass)),function (x){
+  sum(x$HLNoAtLngt_1)
+})
+length_freq_tab<-t(as.table(length_freq_tmp))
+
+Lfreq_sea<-data.frame(year=rep(year, each=length(lencl)),LngtClass=rep(lencl,length(year)),HLNoLngt=NA)
+
+# Fill the table
+for (i in c(1:nrow(Lfreq_sea))){
+  year_i<-Lfreq_sea[i,names(Lfreq_sea)==as.character("year")]
+  lencl_i<-Lfreq_sea[i,names(Lfreq_sea)==as.character("LngtClass")]
+  
+  if(lencl_i%in%c(as.numeric(dimnames(length_freq_tab)[[1]]))){
+    
+    data_i<-length_freq_tab[as.numeric(dimnames(length_freq_tab)[[1]])==lencl_i,dimnames(length_freq_tab)[[2]]==year_i]
+    Lfreq_sea[i,names(Lfreq_sea)==as.character("HLNoLngt")]<-data_i
+    
+  }else{
+    Lfreq_sea[i,names(Lfreq_sea)==as.character("HLNoLngt")]<-0       
+  }
+}
+
+# Replace NA with 0
+Lfreq_sea[which(is.na(Lfreq_sea$HLNoLngt)),names(Lfreq_sea)==as.character("HLNoLngt")]<-0
+#====
+
+#===
+# Calculate proportions from sampled data (observations) ----
+#===
+# Make a table for number of fish sampled, for spawner and non-spawner
+nr_fish_samp_sp_F<-data.frame(year=rep(year,each=length(lencl)),
+                              lencl=rep(lencl,times=length(year)),
+                              a1=NA,a2=NA,a3=NA,a4=NA,a5=NA,a6=NA,a7=NA,a8=NA,a9=NA,a10=NA)
+nr_fish_samp_nonsp_F<-nr_fish_samp_sp_F
+nr_fish_samp_sp_M<-nr_fish_samp_sp_F
+nr_fish_samp_nonsp_M<-nr_fish_samp_sp_F
+
+# Fill the table with how many fish have been sampled (mature, immature)
+## Female
+for (i in 1:nrow(nr_fish_samp_sp_F)){
+  for (j in 3:ncol(nr_fish_samp_sp_F)){
+    lencl_i<-nr_fish_samp_sp_F[i,names(nr_fish_samp_sp_F)==as.character("lencl")]
+    age_i<- j-2
+    year_i<-nr_fish_samp_sp_F[i,names(nr_fish_samp_sp_F)==as.character("year")]
+    
+    if(lencl_i %in% maturity_lngt[which(maturity_lngt$Year == year_i
+                                        & maturity_lngt$Sex == as.character("F")
+                                        & maturity_lngt$Age == age_i),
+                                  names(maturity_lngt)==as.character("LngtClass")]){
+      
+      show_data<-maturity_lngt[which(maturity_lngt$Year==year_i
+                                     &maturity_lngt$LngtClass==lencl_i
+                                     &maturity_lngt$Sex==as.character("F")
+                                     &maturity_lngt$Age==age_i),]
+      
+      nr_fish_samp_sp_F[i,j]<-sum(show_data$spawner)
+      nr_fish_samp_nonsp_F[i,j]<-sum(show_data$nonspawner)
+      
+    } else{
+      
+      nr_fish_samp_sp_F[i,j]<-0
+      nr_fish_samp_nonsp_F[i,j]<-0
+    }
+  }
+}
+
+## Male
+for (i in 1:nrow(nr_fish_samp_sp_M)){
+  for (j in 3:ncol(nr_fish_samp_sp_M)){
+    
+    lencl_i<-nr_fish_samp_sp_M[i,names(nr_fish_samp_sp_M)==as.character("lencl")]
+    age_i<- j-2
+    year_i<-nr_fish_samp_sp_M[i,names(nr_fish_samp_sp_M)==as.character("year")]
+    
+    if(lencl_i%in%maturity_lngt[which(maturity_lngt$Year==year_i&maturity_lngt$Sex==as.character("M")&maturity_lngt$Age==age_i),names(maturity_lngt)==as.character("LngtClass")]){
+      
+      show_data<-maturity_lngt[which(maturity_lngt$Year==year_i&maturity_lngt$LngtClass==lencl_i&maturity_lngt$Sex==as.character("M")&maturity_lngt$Age==age_i),]
+      
+      nr_fish_samp_sp_M[i,j]<-sum(show_data$spawner)
+      nr_fish_samp_nonsp_M[i,j]<-sum(show_data$nonspawner)
+      
+    } else{
+      
+      nr_fish_samp_sp_M[i,j]<-0
+      nr_fish_samp_nonsp_M[i,j]<-0
+    }
+  }
+}
+
+# Total number of fish sampled (immature+mature)  by length
+nr_fish_sampled_tot<-nr_fish_samp_sp_F[,1:5]
+nr_fish_sampled_tot[,3:ncol(nr_fish_sampled_tot)]<-NA
+names(nr_fish_sampled_tot)[3:ncol(nr_fish_sampled_tot)]<-c("F_sp_nonsp","M_sp_nonsp","F_M_tot")
+
+for (i in 1:nrow(nr_fish_sampled_tot)){
+  f_sp<-sum(nr_fish_samp_sp_F[i,3: ncol(nr_fish_samp_sp_F)])
+  f_nonsp<-sum(nr_fish_samp_nonsp_F[i,3: ncol(nr_fish_samp_nonsp_F)])
+  
+  m_sp<-sum(nr_fish_samp_sp_M[i,3: ncol(nr_fish_samp_sp_M)])
+  m_nonsp<-sum(nr_fish_samp_nonsp_M[i,3: ncol(nr_fish_samp_nonsp_M)])
+  
+  nr_fish_sampled_tot[i,names( nr_fish_sampled_tot)==as.character("F_sp_nonsp")] <-f_sp+ f_nonsp
+  nr_fish_sampled_tot[i,names( nr_fish_sampled_tot)==as.character("M_sp_nonsp")] <- m_sp+ m_nonsp
+  nr_fish_sampled_tot[i,names( nr_fish_sampled_tot)==as.character("F_M_tot")] <- f_sp+ f_nonsp+ m_sp+ m_nonsp
+}
+
+# Total number of fish sampled, by age
+sum_nr_sampl_age_sp_F<- data.frame(year=year,a1=NA,a2=NA,a3=NA,a4=NA,a5=NA,a6=NA,a7=NA,a8=NA,a9=NA,a10=NA)
+sum_nr_sampl_age_nonsp_F<-sum_nr_sampl_age_sp_F
+sum_nr_sampl_age_sp_M<-sum_nr_sampl_age_sp_F
+sum_nr_sampl_age_nonsp_M<-sum_nr_sampl_age_sp_F
+
+## Female
+for (i in 1:nrow(sum_nr_sampl_age_sp_F)){
+  for (j in 2:ncol(sum_nr_sampl_age_sp_F)){
+    
+    i_year<-sum_nr_sampl_age_sp_F[i,names(sum_nr_sampl_age_sp_F)==as.character("year")]
+    sum_nr_sampl_age_sp_F[i,j]<-sum(nr_fish_samp_sp_F[which(nr_fish_samp_sp_F$year==i_year),names(nr_fish_samp_sp_F)==names(sum_nr_sampl_age_sp_F)[j]])
+  }
+}
+#
+for (i in 1:nrow(sum_nr_sampl_age_nonsp_F)){
+  for (j in 2:ncol(sum_nr_sampl_age_nonsp_F)){
+    
+    i_year<-sum_nr_sampl_age_nonsp_F[i,names(sum_nr_sampl_age_nonsp_F)==as.character("year")]
+    sum_nr_sampl_age_nonsp_F[i,j]<-sum(nr_fish_samp_nonsp_F[which(nr_fish_samp_nonsp_F$year==i_year),names(nr_fish_samp_nonsp_F)==names(sum_nr_sampl_age_nonsp_F)[j]])
+  }
+}
+
+## Male
+for (i in 1:nrow(sum_nr_sampl_age_sp_M)){
+  for (j in 2:ncol(sum_nr_sampl_age_sp_M)){
+    
+    i_year<-sum_nr_sampl_age_sp_M[i,names(sum_nr_sampl_age_sp_M)==as.character("year")]
+    sum_nr_sampl_age_sp_M[i,j]<-sum(nr_fish_samp_sp_M[which(nr_fish_samp_sp_M$year==i_year),names(nr_fish_samp_sp_M)==names(sum_nr_sampl_age_sp_M)[j]])
+  }
+}
+#
+for (i in 1:nrow(sum_nr_sampl_age_nonsp_M)){
+  for (j in 2:ncol(sum_nr_sampl_age_nonsp_M)){
+    
+    i_year<-sum_nr_sampl_age_nonsp_M[i,names(sum_nr_sampl_age_nonsp_M)==as.character("year")]
+    sum_nr_sampl_age_nonsp_M[i,j]<-sum(nr_fish_samp_nonsp_M[which(nr_fish_samp_nonsp_M$year==i_year),names(nr_fish_samp_nonsp_M)==names(sum_nr_sampl_age_nonsp_M)[j]])
+  }
+}
+#====
+
+#===
+# Raise proportions to unsampled strata ----
+#===
+# Make tables 
+nr_fish_sea_sp_F<-nr_fish_samp_sp_F
+nr_fish_sea_sp_F[,3:ncol(nr_fish_sea_sp_F)]<-NA
+
+nr_fish_sea_nonsp_F<-nr_fish_sea_sp_F
+nr_fish_sea_sp_M<-nr_fish_sea_sp_F
+nr_fish_sea_nonsp_M<-nr_fish_sea_sp_F
+
+# Numbers at sea by maturity class by length
+## Female spawner 
+for (i in 1:nrow(nr_fish_sea_sp_F)){
+  for (j in 3:ncol(nr_fish_sea_sp_F)){
+    
+    if(nr_fish_sampled_tot[i,names(nr_fish_sampled_tot)==as.character("F_sp_nonsp")]>0){ 
+      mat_tot_ratio<-nr_fish_samp_sp_F[i,j]/nr_fish_sampled_tot[i,names(nr_fish_sampled_tot)==as.character("F_sp_nonsp")]
+      female_tot_ratio<-nr_fish_sampled_tot[i,names(nr_fish_sampled_tot)==as.character("F_sp_nonsp")]/nr_fish_sampled_tot[i,names(nr_fish_sampled_tot)==as.character("F_M_tot")]
+      
+      tot_len<-Lfreq_sea[i,names(Lfreq_sea)==as.character("HLNoLngt")]
+      nr_fish_sea_sp_F[i,j]<-mat_tot_ratio* female_tot_ratio*tot_len
+    }else{
+      nr_fish_sea_sp_F[i,j]<-0
+    }
+  }
+} 
+
+## Female nonspawner
+for (i in 1:nrow(nr_fish_sea_nonsp_F)){
+  for (j in 3:ncol(nr_fish_sea_nonsp_F)){
+    
+    if(nr_fish_sampled_tot[i,names(nr_fish_sampled_tot)==as.character("F_sp_nonsp")]>0){ 
+      mat_tot_ratio<-nr_fish_samp_nonsp_F[i,j]/nr_fish_sampled_tot[i,names(nr_fish_sampled_tot)==as.character("F_sp_nonsp")]
+      female_tot_ratio<-nr_fish_sampled_tot[i,names(nr_fish_sampled_tot)==as.character("F_sp_nonsp")]/nr_fish_sampled_tot[i,names(nr_fish_sampled_tot)==as.character("F_M_tot")]
+      
+      tot_len<-Lfreq_sea[i,names(Lfreq_sea)==as.character("HLNoLngt")]
+      nr_fish_sea_nonsp_F[i,j]<-mat_tot_ratio* female_tot_ratio*tot_len
+    }else{
+      nr_fish_sea_nonsp_F[i,j]<-0
+    }
+  }
+} 
+
+## Male spawner
+for (i in 1:nrow(nr_fish_sea_sp_M)){
+  for (j in 3:ncol(nr_fish_sea_sp_M)){
+    
+    if(nr_fish_sampled_tot[i,names(nr_fish_sampled_tot)==as.character("M_sp_nonsp")]>0){ 
+      mat_tot_ratio<-nr_fish_samp_sp_M[i,j]/nr_fish_sampled_tot[i,names(nr_fish_sampled_tot)==as.character("M_sp_nonsp")]
+      male_tot_ratio<-nr_fish_sampled_tot[i,names(nr_fish_sampled_tot)==as.character("M_sp_nonsp")]/nr_fish_sampled_tot[i,names(nr_fish_sampled_tot)==as.character("F_M_tot")]
+      
+      tot_len<-Lfreq_sea[i,names(Lfreq_sea)==as.character("HLNoLngt")]
+      nr_fish_sea_sp_M[i,j]<-mat_tot_ratio* male_tot_ratio*tot_len
+    }else{
+      nr_fish_sea_sp_M[i,j]<-0
+    }
+  }
+} 
+
+## Male non-spawner
+for (i in 1:nrow(nr_fish_sea_nonsp_M)){
+  for (j in 3:ncol(nr_fish_sea_nonsp_M)){
+    
+    if(nr_fish_sampled_tot[i,names(nr_fish_sampled_tot)==as.character("M_sp_nonsp")]>0){ 
+      mat_tot_ratio<-nr_fish_samp_nonsp_M[i,j]/nr_fish_sampled_tot[i,names(nr_fish_sampled_tot)==as.character("M_sp_nonsp")]
+      male_tot_ratio<-nr_fish_sampled_tot[i,names(nr_fish_sampled_tot)==as.character("M_sp_nonsp")]/nr_fish_sampled_tot[i,names(nr_fish_sampled_tot)==as.character("F_M_tot")]
+      
+      tot_len<-Lfreq_sea[i,names(Lfreq_sea)==as.character("HLNoLngt")]
+      nr_fish_sea_nonsp_M[i,j]<-mat_tot_ratio* male_tot_ratio*tot_len
+    }else{
+      nr_fish_sea_nonsp_M[i,j]<-0
+    }
+  }
+} 
+
+# Sum of numbers at sea, by maturity class, by ages (sum over length-groups) - generate tables
+sum_nr_sea_age_sp_F<-sum_nr_sampl_age_sp_F
+sum_nr_sea_age_sp_F[,-1]<-NA 
+
+sum_nr_sea_age_nonsp_F<- sum_nr_sea_age_sp_F
+sum_nr_sea_age_sp_M<-sum_nr_sea_age_sp_F
+sum_nr_sea_age_nonsp_M<-sum_nr_sea_age_sp_F
+
+## Female spawner
+for (i in 1:nrow(sum_nr_sea_age_sp_F)){
+  for (j in 2:ncol(sum_nr_sea_age_sp_F)){
+    
+    i_year<-sum_nr_sea_age_sp_F[i,names(sum_nr_sea_age_sp_F)==as.character("year")]
+    sum_nr_sea_age_sp_F[i,j]<-sum(nr_fish_sea_sp_F[which(nr_fish_sea_sp_F$year==i_year),names(nr_fish_sea_sp_F)==names(sum_nr_sea_age_sp_F)[j]])
+  }
+}
+
+## Female non-spawner
+for (i in 1:nrow(sum_nr_sea_age_nonsp_F)){
+  for (j in 2:ncol(sum_nr_sea_age_nonsp_F)){
+    
+    i_year<-sum_nr_sea_age_nonsp_F[i,names(sum_nr_sea_age_nonsp_F)==as.character("year")]
+    sum_nr_sea_age_nonsp_F[i,j]<-sum(nr_fish_sea_nonsp_F[which(nr_fish_sea_nonsp_F$year==i_year),names(nr_fish_sea_nonsp_F)==names(sum_nr_sea_age_nonsp_F)[j]])
+  }
+}
+
+## Male spawner
+for (i in 1:nrow(sum_nr_sea_age_sp_M)){
+  for (j in 2:ncol(sum_nr_sea_age_sp_M)){
+    
+    i_year<-sum_nr_sea_age_sp_M[i,names(sum_nr_sea_age_sp_M)==as.character("year")]
+    sum_nr_sea_age_sp_M[i,j]<-sum(nr_fish_sea_sp_M[which(nr_fish_sea_sp_M$year==i_year),names(nr_fish_sea_sp_M)==names(sum_nr_sea_age_sp_M)[j]])
+  }
+}
+
+## Male non-spawner
+for (i in 1:nrow(sum_nr_sea_age_nonsp_M)){
+  for (j in 2:ncol(sum_nr_sea_age_nonsp_M)){
+    
+    i_year<-sum_nr_sea_age_nonsp_M[i,names(sum_nr_sea_age_nonsp_M)==as.character("year")]
+    sum_nr_sea_age_nonsp_M[i,j]<-sum(nr_fish_sea_nonsp_M[which(nr_fish_sea_nonsp_M$year==i_year),names(nr_fish_sea_nonsp_M)==names(sum_nr_sea_age_nonsp_M)[j]])
+  }
+}
+#====
+
+#===
+# Calculate the sex ratio ----
+#===
+sex_ratio_female<-sum_nr_sea_age_sp_F
+sex_ratio_female[,-1]<-NA
+
+for (j in 2:ncol(sex_ratio_female)){
+  sex_ratio_female[,j]<-(sum_nr_sea_age_nonsp_F[,j]+sum_nr_sea_age_sp_F[,j])/(sum_nr_sea_age_nonsp_F[,j]+sum_nr_sea_age_sp_F[,j]+sum_nr_sea_age_nonsp_M[,j]+sum_nr_sea_age_sp_M[,j])
+}
+#====
+
+#===
+# Calculate Maturity Ogives ----
+#===
+# Generate tables for female, male and combined ogives
+mat_ogive_F<-sum_nr_sampl_age_sp_F
+mat_ogive_F[,-1]<-NA
+mat_ogive_M<- mat_ogive_F
+mat_ogive_combsex<- mat_ogive_F
+
+# Female mature
+for (i in 1:nrow (mat_ogive_F)){
+  for (j in 2:ncol(mat_ogive_F)){
+    mat_ogive_F[i,j]<- sum_nr_sea_age_sp_F[i,j]/(sum_nr_sea_age_sp_F[i,j]+sum_nr_sea_age_nonsp_F[i,j]) 
+  }
+}  
+# Male mature
+for (i in 1:nrow (mat_ogive_M)){
+  for (j in 2:ncol(mat_ogive_M)){
+    mat_ogive_M[i,j]<- sum_nr_sea_age_sp_M[i,j]/(sum_nr_sea_age_sp_M[i,j]+sum_nr_sea_age_nonsp_M[i,j]) 
+  }
+}  
+
+# Combsex mature                  
+for (i in 1:nrow (mat_ogive_combsex)){
+  for (j in 2:ncol(mat_ogive_combsex)){
+    mat_ogive_combsex[i,j]<-(mat_ogive_F[i,j]*sex_ratio_female[i,j])+(mat_ogive_M[i,j]*(1-sex_ratio_female[i,j])) 
+  }  
+}
+#====
+
+#===
+# Combined Sexes reshape and calculate means +/- 95%CI for plotting ----
+#===
+## Complete timeseries of annual maturity ogives ----
+mo <- reshape(mat_ogive_combsex,
+              varying = colnames(mat_ogive_combsex)[-1],
+              v.names = "PropMat",
+              timevar = "Age",
+              times = colnames(mat_ogive_combsex)[-1],
+              idvar = "year",
+              direction = "long")
+
+## Mean of period 2002 - DataYear
+rmprop <- aggregate(PropMat ~ Age,
+                    data = mo[mo$year %in% c(2002:(DataYear+1)),],
+                    FUN = mean)
+
+## Std. error of period 2002 - DataYear
+rmstdr <- aggregate(PropMat ~ Age,
+                    data = mo[mo$year %in% c(2002:(DataYear+1)), ],
+                    FUN = function(x){sd(x, na.rm = TRUE)/sqrt(length(na.omit(x)))})
+rmstdr$AgeN <- as.numeric(sub(pattern = "a", replacement = "", x = rmstdr$Age))
+colnames(rmstdr)[colnames(rmstdr) %in% c("PropMat")] <- "StdErr"
+rmstdr$PropMat <- rmprop$PropMat
+rmstdr$ymax <- rmstdr$PropMat + 1.96*rmstdr$StdErr
+rmstdr$ymin <- rmstdr$PropMat - 1.96*rmstdr$StdErr
+
+## Combine with raw data df
+rmprop$year <- as.factor(rep("Running Mean", n = nrow(rmprop)))
+rownames(rmstdr) <- NULL
+mo <- rbind(mo, rmprop)
+mo$AgeN <- as.numeric(sub(pattern = "a", replacement = "", x = mo$Age))
+mo$yearF <- as.factor(as.character(mo$year))
+#=====
+
+
+#===
+# Female Only reshape and calculate means +/- 95%CI for plotting ----
+#===
+## Complete timeseries of annual maturity ogives ----
+fmo <- reshape(mat_ogive_F,
+               varying = colnames(mat_ogive_F)[-1],
+               v.names = "PropMat",
+               timevar = "Age",
+               times = colnames(mat_ogive_F)[-1],
+               idvar = "year",
+               direction = "long")
+
+## Mean of period 2002 - DataYear  ----
+rfmprop <- aggregate(PropMat ~ Age,
+                     data = fmo[fmo$year %in% c(2002:(DataYear+1)),],
+                     FUN = mean)
+
+## Std. error of period 2002 - DataYear  ----
+rfmstdr <- aggregate(PropMat ~ Age,
+                     data = fmo[fmo$year %in% c(2002:(DataYear+1)), ],
+                     FUN = function(x){sd(x, na.rm = TRUE)/sqrt(length(na.omit(x)))})
+rfmstdr$AgeN <- as.numeric(sub(pattern = "a", replacement = "", x = rfmstdr$Age))
+colnames(rfmstdr)[colnames(rfmstdr) %in% c("PropMat")] <- "StdErr"
+rfmstdr$PropMat <- rfmprop$PropMat
+rfmstdr$ymax <- rfmstdr$PropMat + 1.96*rfmstdr$StdErr
+rfmstdr$ymin <- rfmstdr$PropMat - 1.96*rfmstdr$StdErr
+
+## Combine with raw data df  ----
+rfmprop$year <- as.factor(rep("Running Mean", n = nrow(rfmprop)))
+rownames(rfmstdr) <- NULL
+fmo <- rbind(fmo, rfmprop)
+fmo$AgeN <- as.numeric(sub(pattern = "a", replacement = "", x = fmo$Age))
+fmo$yearF <- as.factor(as.character(fmo$year))
+
+
+# saveRDS(fmo, file = "Data/BiologicalData/Ple.27.21-32_MaturitiesFemaleLong_1999-AssYear.RDS")
+# saveRDS(fmstdr, file("Data/BiologicalData/Ple.27.21-32_MaturitiesFemaleAveStdErr_15yr.RDS"))
+# saveRDS(rfmstdr, file("Data/BiologicalData/Ple.27.21-32_MaturitiesFemaleAveStdErr_2002-AssYear.RDS"))
+#=====
+
+#===
+# Male Only reshape and calculate means +/- 95%CI for plotting ----
+#===
+## Complete timeseries of annual maturity ogives ----
+mmo <- reshape(mat_ogive_M,
+               varying = colnames(mat_ogive_M)[-1],
+               v.names = "PropMat",
+               timevar = "Age",
+               times = colnames(mat_ogive_M)[-1],
+               idvar = "year",
+               direction = "long")
+
+## Mean of period 2002 - DataYear ----
+rmmprop <- aggregate(PropMat ~ Age,
+                     data = mmo[mmo$year %in% c(2002:(DataYear+1)),],
+                     FUN = mean)
+
+## Std. error of period 2002 - DataYear  ----
+rmmstdr <- aggregate(PropMat ~ Age,
+                     data = mmo[mmo$year %in% c(2002:(DataYear+1)), ],
+                     FUN = function(x){sd(x, na.rm = TRUE)/sqrt(length(na.omit(x)))})
+rmmstdr$AgeN <- as.numeric(sub(pattern = "a", replacement = "", x = rmmstdr$Age))
+colnames(rmmstdr)[colnames(rmmstdr) %in% c("PropMat")] <- "StdErr"
+rmmstdr$PropMat <- rmmprop$PropMat
+rmmstdr$ymax <- rmmstdr$PropMat + 1.96*rmmstdr$StdErr
+rmmstdr$ymin <- rmmstdr$PropMat - 1.96*rmmstdr$StdErr
+
+## Combine with raw data df  ----
+rmmprop$year <- as.factor(rep("Running Mean", n = nrow(rmmprop)))
+rownames(rmmstdr) <- NULL
+mmo <- rbind(mmo, rmmprop)
+mmo$AgeN <- as.numeric(sub(pattern = "a", replacement = "", x = mmo$Age))
+mmo$yearF <- as.factor(as.character(mmo$year))
+
+
+# saveRDS(mmo, file = "Data/BiologicalData/Ple.27.21-32_MaturitiesMaleLong_1999-AssYear.RDS")
+# saveRDS(mmstdr, file("Data/BiologicalData/Ple.27.21-32_MaturitiesMaleAveStdErr_15yr.RDS"))
+# saveRDS(rmmstdr, file("Data/BiologicalData/Ple.27.21-32_MaturitiesMaleAveStdErr_2002-AssYear.RDS"))
+#=====
+
+#===
+# Combined Sexes Sliding window averages ----
+#===
+## Calculate 3y sliding window average for whole timeseries ----
+### Calculate the mean ----
+ada <- an(3, nrow(mat_ogive_combsex))
+mo3sw <- frollmean(x = mat_ogive_combsex[, -1], n = ada, na.rm = T, align = "right", adaptive = TRUE)
+mo3sw <- as.data.frame(do.call(cbind, mo3sw))
+mo3sw$year <- mat_ogive_combsex$year
+
+#### Wide to long format
+mo3swL <- reshape(mo3sw,
+                  varying = colnames(mo3sw)[-11],
+                  v.names = "PropMat",
+                  timevar = "Age",
+                  times = colnames(mo3sw)[-11],
+                  idvar = "year",
+                  direction = "long")
+mo3swL$Age <- as.numeric(gsub(pattern = "V", replacement = "", x = mo3swL$Age))
+
+### Calcualte the standard error ----
+sw3stdr <- frollapply(mat_ogive_combsex[, -1],
+                      3,
+                      FUN = function(x){sd(x, na.rm = TRUE)/sqrt(length(na.omit(x)))})
+sw3stdr <- as.data.frame(do.call(cbind, sw3stdr))
+sw3stdr$year <- mat_ogive_combsex$year
+
+#### Wide to long format
+sw3stdrL <- reshape(sw3stdr,
+                    varying = colnames(sw3stdr)[-11],
+                    v.names = "StdErrPropMat",
+                    timevar = "Age",
+                    times = colnames(sw3stdr)[-11],
+                    idvar = "year",
+                    direction = "long")
+sw3stdrL$Age <- as.numeric(gsub(pattern = "V", replacement = "", x = sw3stdrL$Age))
+
+### Calculate 95% confidence intervals ----
+mo3swL <- merge(x = mo3swL, y = sw3stdrL, by = c("year", "Age"), all.x = TRUE)
+mo3swL$ymax <- mo3swL$PropMat + (1.96*mo3swL$StdErrPropMat)
+mo3swL$ymin <- mo3swL$PropMat - (1.96*mo3swL$StdErrPropMat)
+mo3swL$AgeN <- mo3swL$Age
+mo3swL$Age <- as.character(mo3swL$Age)
+mo3swL <- mo3swL[!mo3swL$year %in% c(1999:2001),]
+
+## Calculate 5y sliding window average for whole timeseries ----
+### Calculate the mean ----
+ada <- an(5, nrow(mat_ogive_combsex))
+mo5sw <- frollmean(x = mat_ogive_combsex[, -1], n = ada, na.rm = T, align = "right", adaptive = TRUE)
+mo5sw <- as.data.frame(do.call(cbind, mo5sw))
+#### Make the first year equal to the first calculable 5y average
+mo5sw$year <- mat_ogive_combsex$year
+# mo5sw[mo5sw$year == 2002, -ncol(mo5sw)] <- mo5sw[mo5sw$year == 2003, -ncol(mo5sw)]
+mo5sw <- mo5sw[!mo5sw$year %in% c(1999:2001),]
+
+
+#### Wide to long format
+mo5swL <- reshape(mo5sw,
+                  varying = colnames(mo5sw)[-11],
+                  v.names = "PropMat",
+                  timevar = "Age",
+                  times = colnames(mo5sw)[-11],
+                  idvar = "year",
+                  direction = "long")
+mo5swL$Age <- as.numeric(gsub(pattern = "V", replacement = "", x = mo5swL$Age))
+
+### Calcualte the standard error ----
+sw5stdr <- frollapply(mat_ogive_combsex[, -1],
+                      5,
+                      FUN = function(x){sd(x, na.rm = TRUE)/sqrt(length(na.omit(x)))})
+sw5stdr <- as.data.frame(do.call(cbind, sw5stdr))
+sw5stdr$year <- mat_ogive_combsex$year
+
+#### Make the first year equal to the first calculable 5y average
+sw5stdr[sw5stdr$year == 2002, -ncol(sw5stdr)] <- sw5stdr[sw5stdr$year == 2003, -ncol(sw5stdr)]
+sw5stdr <- sw5stdr[!sw5stdr$year %in% c(1999:2001),]
+
+#### Wide to long format
+sw5stdrL <- reshape(sw5stdr,
+                    varying = colnames(sw5stdr)[-11],
+                    v.names = "StdErrPropMat",
+                    timevar = "Age",
+                    times = colnames(sw5stdr)[-11],
+                    idvar = "year",
+                    direction = "long")
+sw5stdrL$Age <- as.numeric(gsub(pattern = "V", replacement = "", x = sw5stdrL$Age))
+
+### Calculate 95% confidence intervals ----
+mo5swL <- merge(x = mo5swL, y = sw5stdrL, by = c("year", "Age"), all.x = TRUE)
+mo5swL$ymax <- mo5swL$PropMat + (1.96*mo5swL$StdErrPropMat)
+mo5swL$ymin <- mo5swL$PropMat - (1.96*mo5swL$StdErrPropMat)
+mo5swL$AgeN <- mo5swL$Age
+mo5swL$Age <- as.character(mo5swL$Age)
+mo5swL <- mo5swL[!mo5swL$year %in% c(1999:2001),]
+
+
+## Calculate annual values from a smoothing spline ----
+### Build the spline
+mo2 <- mo
+mo2$Age <- as.factor(mo2$Age)
+mo2$year <- as.numeric(mo2$year)
+moss <- gam(formula = PropMat ~ s(year, bs = "cr", by = Age), data = mo2, family = gaussian(link = "identity"))
+
+### Predict with the smoothed spline
+predmo<- predict.gam(moss, newdata = mo2, type = "response", se.fit = TRUE)
+mo2$smoothPropMat <- unname(predmo$fit)
+mo2$seSmoothPropMat <- unname(predmo$se.fit)
+
+#====
+
+#===
+# Clean Data Environment
+#====
+k <- append(k, c("mo", "mstdr", "rmstdr", "mat_ogive_F", "mat_ogive_M", "mat_ogive_combsex", "mo3swL", "mo5swL", "mo2", "sex_ratio_female"))
+rm(list = ls()[!ls() %in% k])
+#=====
+```
+
+
+```{r MOTable_rm}
+# kable(mo[mo$year == "Running Mean", c("AgeN", "PropMat") ], 
+rmstdrder <- rmstdr[order(rmstdr$AgeN), c("AgeN", "PropMat") ]
+rownames(rmstdrder) <- NULL
+
+### save_as_lowestoft Mean 2002-DataYear
+mmA <- data.frame(lapply(colMeans(mat_ogive_combsex[mat_ogive_combsex$year %in% c(2002:DataYear), !colnames(mat_ogive_combsex) %in% ("year")], na.rm = TRUE), type.convert), stringsAsFactors=FALSE)
+
+save_as_lowestoft(df = mmA, #[, !colnames(mWAA) %in% "Age"],
+                  file_path = "Assessment Input/AlternateModel_TimeInvariant/mo.dat",
+                  title = "Stock weights at age for Ple.27.21-32. Mean values for combined sexes 2002 to Data year, from survey data",
+                  rando_numbers = paste(c(1, 4), collapse = "\t"),
+                  year_range = paste(c(2002, DataYear), collapse = "\t"),
+                  age_range = paste(c(1, 10), collapse = "\t"),
+                  timeseries_type = 2)
+
+# kable(rmstdrder, 
+#       caption = paste0("Maturity Ogives of Ple.27.21-32, using the stock annex method from the previous Ple.27.21-23.  Values are timeseries means of both sexes for the period 2002-", DataYear),
+#       digits = 2)
+```
+
+
+```{r MOTable_sw3}
+mo3order <- mo3swL[order(mo3swL$year, mo3swL$AgeN), c("year", "AgeN", "PropMat") ]
+rownames(mo3order) <- NULL
+mo3orderw <- dcast(mo3order, year ~ AgeN, value.var = "PropMat")
+
+## Save maturity data for assessment input
+# ### Make "NA"s into "-9"
+# mo3orderwSAM <- mo3orderw[mo3orderw$year %in% c(2002:(DataYear+1)), ]
+# for(i in 1:ncol(mo3orderwSAM)){
+#   for(j in 1:nrow(mo3orderwSAM)){
+#     mo3orderwSAM[j, i] <- ifelse(is.na(mo3orderwSAM[j, i]), -9, mo3orderwSAM[j, i])
+#   }
+# }
+
+### Make early timeseries "NA"s into plausible value
+mo3orderwSAM <- mo3orderw[mo3orderw$year %in% c(2002:(DataYear+1)), ]
+for(i in 1:ncol(mo3orderwSAM)){
+  for(j in 1:nrow(mo3orderwSAM)){
+    mo3orderwSAM[j, i] <- ifelse(is.na(mo3orderwSAM[j, i]), median(c(mo3orderwSAM[,i]), na.rm = T), mo3orderwSAM[j, i])
+  }
+}
+
+save_as_lowestoft(mo3orderwSAM[, !colnames(mo3orderwSAM) %in% "year"],
+                  file_path = "Assessment Input/AlternateModel_3ysw/mo.dat", title = paste0("Combined sex maturity ogives for ple.27.21-32. Three year sliding window means from 2002:", DataYear+1),
+                  rando_numbers = paste(c("1", "6", "#I don't know what this information stands for, it's just made up."), collapse = "\t"),
+                  year_range = paste(c(2002, (DataYear+1)), collapse = "\t"), 
+                  age_range = paste(c(1, 10), collapse = "\t"),
+                  timeseries_type = paste(c(1, "# 1 indicates annually varying, 2 indicates fixed values"), collapse = "\t"))
+
+# kable(mo3orderw, 
+#       caption = paste0("Maturity Ogives of Ple.27.21-32, using a 3 year sliding window mean approach.  Values are timeseries means of the whole timeseries, 2002:", DataYear+1),
+#       digits = 2)
+```
+
+
+```{r MOTable_AnnualEstimates}
+moRawOrder <- mat_ogive_combsex[mat_ogive_combsex$year %in% c(2002:(DataYear+1)), ]
+rownames(moRawOrder) <- NULL
+
+# ## Save maturity data for assessment input
+# moRawOrderSAM <- moRawOrder[moRawOrder$year %in% c(2002:(DataYear+1)), ]
+# for(i in 1:ncol(moRawOrderSAM)){
+#   for(j in 1:nrow(moRawOrderSAM)){
+#     moRawOrderSAM[j, i] <- ifelse(is.na(moRawOrderSAM[j, i]), -9, moRawOrderSAM[j, i])
+#   }
+# }
+
+### Make early timeseries "NA"s into plausible value
+moRawOrderSAM <- moRawOrder[moRawOrder$year %in% c(2002:(DataYear+1)), ]
+for(i in 1:ncol(moRawOrderSAM)){
+  for(j in 1:nrow(moRawOrderSAM)){
+    moRawOrderSAM[j, i] <- ifelse(is.na(moRawOrderSAM[j, i]), median(c(moRawOrderSAM[,i]), na.rm = T), moRawOrderSAM[j, i])
+  }
+}
+
+save_as_lowestoft(moRawOrderSAM[, !colnames(moRawOrderSAM) %in% "year"],
+                  file_path = "Assessment Input/AlternateModel_AnnualRawBio/mo.dat", title = paste0("Combined sex maturity ogives for ple.27.21-32. Annual estimates from 2002:", DataYear+1),
+                  rando_numbers = paste(c("1", "6", "#I don't know what this information stands for, it's just made up."), collapse = "\t"),
+                  year_range = paste(c(2002, (DataYear+1)), collapse = "\t"),
+                  age_range = paste(c(1, 10), collapse = "\t"),
+                  timeseries_type = paste(c(1, "# 1 indicates annually varying, 2 indicates fixed values"), collapse = "\t"))
+
+kable(moRawOrder, 
+      caption = paste0("Maturity Ogives of Ple.27.21-32, using annual estimates from surveys for the whole timeseries, 2002:", DataYear+1),
+      digits = 2)
+```
+
+
+```{r MOTable_sw5}
+mo5order <- mo5swL[order(mo5swL$year, mo5swL$AgeN), c("year", "AgeN", "PropMat") ]
+rownames(mo5order) <- NULL
+mo5orderw <- dcast(mo5order, year ~ AgeN, value.var = "PropMat")
+
+# ## Save maturity data for assessment input
+# mo5orderwSAM <- mo5orderw[mo5orderw$year %in% c(2002:(DataYear+1)), ]
+# for(i in 1:ncol(mo5orderwSAM)){
+#   for(j in 1:nrow(mo5orderwSAM)){
+#     mo5orderwSAM[j, i] <- ifelse(is.na(mo5orderwSAM[j, i]), -9, mo5orderwSAM[j, i])
+#   }
+# }
+
+### Make early timeseries "NA"s into plausible value
+mo5orderwSAM <- mo5orderw[mo5orderw$year %in% c(2002:(DataYear+1)), ]
+for(i in 1:ncol(mo5orderwSAM)){
+  for(j in 1:nrow(mo5orderwSAM)){
+    mo5orderwSAM[j, i] <- ifelse(is.na(mo5orderwSAM[j, i]), median(c(mo5orderwSAM[,i]), na.rm = T), mo5orderwSAM[j, i])
+  }
+}
+
+save_as_lowestoft(mo5orderwSAM[, !colnames(mo5orderwSAM) %in% "year"],
+                  file_path = "Assessment Input/AlternateModel_5ysw/mo.dat", title = paste0("Combined sex maturity ogives for ple.27.21-32. Five year sliding window means from 2002:", DataYear+1),
+                  rando_numbers = paste(c("1", "6", "#I don't know what this information stands for, it's just made up."), collapse = "\t"),
+                  year_range = paste(c(2002, (DataYear+1)), collapse = "\t"), 
+                  age_range = paste(c(1, 10), collapse = "\t"),
+                  timeseries_type = paste(c(1, "# 1 indicates annually varying, 2 indicates fixed values"), collapse = "\t"))
+
+kable(mo5orderw, 
+      caption = paste0("Maturity Ogives of Ple.27.21-32, using a 5 year sliding window mean approach.  Values are timeseries means of the whole timeseries, 2002:", DataYear+1),
+      digits = 2)
+```
+
+```{r MOTable_AnnualSmoothedEstimates}
+mo2w <- reshape(mo2[, c("year", "Age", "smoothPropMat")],
+                 v.names = "smoothPropMat",
+                 timevar = "Age",
+                 idvar = "year",
+                 direction = "wide")
+
+# for(i in 2:ncol(mo2w)){
+#   for(j in 2:nrow(mo2w)){
+#     mo2w[j, i] <- ifelse(is.na(mo2w[j, i]), -9, mo2w[j, i])
+#     mo2w[j, i] <- ifelse((mo2w[j, i]>1), 1, mo2w[j, i])
+#   }
+# }
+
+### Make early timeseries "NA"s into plausible value
+mo2wSAM <- mo2w[mo2w$year %in% c(2002:(DataYear+1)), ]
+for(i in 1:ncol(mo2wSAM)){
+  for(j in 1:nrow(mo2wSAM)){
+    mo2wSAM[j, i] <- ifelse(is.na(mo2wSAM[j, i]), median(c(mo2wSAM[,i]), na.rm = T), mo2wSAM[j, i])
+    mo2w[j, i] <- ifelse((mo2w[j, i]>1), 1, mo2w[j, i])
+  }
+}
+
+rownames(mo2w) <- NULL
+
+save_as_lowestoft(df = mo2w[mo2w$year %in% c(2002:(DataYear+1)), ],
+                  file_path = "Assessment Input/AlternateModel_SSbio/mo.dat",
+                  title = "Maturity Ogive for Ple.27.21-32. Smooth Spline for combined sexes, from survey data",
+                  rando_numbers = paste(c(1, 4), collapse = "\t"),
+                  year_range = paste(c(2002, (DataYear+1)), collapse = "\t"),
+                  age_range = paste(c(1, 10), collapse = "\t"))
+
+# kable(mo2w[mo2w$year >= 2002, ], 
+#       caption = paste0("Maturity Ogives of Ple.27.21-32, using spline smoothed estimates from survey observations for the whole timeseries, 2002:", DataYear+1),
+#       digits = 2)
+```
+
+```{r eval=FALSE, fig.cap= paste0("Maturity ogives for individual previous years (colours), the running mean based on Ple.27.21-23 stock annex (black dotted +/- 95% CI), and for ", DataYear, " (solid black)")}
+plt_mo_rm <- ggplot() +
+  geom_line(data = mo[!mo$year %in% c("Running Mean", DataYear) & as.numeric(as.character(mo$year)) >= 2002 & as.numeric(as.character(mo$year)) != (DataYear+1), ],
+            mapping = aes(x = AgeN,
+                          y = PropMat,
+                          group = yearF,
+                          colour = yearF)) +
+  geom_line(data = mo[mo$yearF == "Running Mean",],
+            mapping = aes(x = AgeN,
+                          y = PropMat,
+                          group = yearF),
+            colour = "Black",
+            linetype = 3,
+            size = 1.5) +
+  geom_errorbar(data = rmstdr,
+                mapping = aes(x = AgeN,
+                              ymax = ymax,
+                              ymin = ymin),
+                colour = "Black",
+                linetype = 3,
+                size = 1) +
+  geom_line(data = mo[mo$yearF == DataYear, ],
+            mapping = aes(x = AgeN,
+                          y = PropMat,
+                          group = yearF),
+            colour = "Black",
+            # linetype = 9,
+            size = 1.2) +
+  theme_clean()+
+  # scale_color_manual(values = ebpal) +
+  scale_x_continuous(breaks = function(x) pretty(x, n = 5))
+
+ggplotly(plt_mo_rm)
+```
+
+```{r eval=FALSE, fig.cap= paste0("Maturity ogives for three year sliding window means applied as annually varying maturity values. The running mean utilised in the Ple.27.21-23 annex is overlain for comparison (black dotted +/- 95% CI).")}
+#===
+# Figure showing 3 year sliding window MO vs others
+#====
+## Make ordered mo3swL, with ymax max 1
+mo3swLO <- mo3swL[order(mo3swL$year, mo3swL$AgeN), c("year", "AgeN", "PropMat", "ymax", "ymin")]
+mo3swLO$ymax <- ifelse(mo3swLO$ymax > 1, 1, mo3swLO$ymax)
+mo3swLO$ymin <- ifelse(mo3swLO$ymin < 0, 0, mo3swLO$ymin)
+mo3swLO$yearF <- as.factor(as.character(mo3swLO$year))
+
+plt_mo3swL <- ggplot() +
+  geom_line(data = mo3swLO,
+            mapping = aes(x = AgeN,
+                          y = PropMat,
+                          group = yearF,
+                          colour = yearF)) +
+  geom_ribbon(data = mo3swLO,
+            mapping = aes(x = AgeN,
+                          ymax = ymax,
+                          ymin = ymin,
+                          group = yearF,
+                          fill = yearF),
+            alpha = 0.05) +
+  geom_line(data = mo[mo$yearF == "Running Mean",],
+            mapping = aes(x = AgeN,
+                          y = PropMat,
+                          group = yearF),
+            colour = "Black",
+            linetype = 3,
+            size = 1.5) +
+  geom_errorbar(data = rmstdr,
+                mapping = aes(x = AgeN,
+                              ymax = ymax,
+                              ymin = ymin),
+                colour = "Black",
+                linetype = 3,
+                size = 1) +
+  theme_clean()+
+  scale_x_continuous(breaks = function(x) pretty(x, n = 5)) 
+  
+ggplotly(plt_mo3swL)
+#=====
+```
+
+```{r fig.cap= paste0("Maturity ogives for five year sliding window means applied as annually varying maturity values. The running mean utilised in the Ple.27.21-23 annex is overlain for comparison  (black dotted +/- 95% CI).")}
+#===
+# Figure showing 5 year sliding window MO vs others
+#====
+## Make ordered mo5swL, with ymax max 1
+mo5swLO <- mo5swL[order(mo5swL$year, mo5swL$AgeN), c("year", "AgeN", "PropMat", "ymax", "ymin")]
+mo5swLO$ymax <- ifelse(mo5swLO$ymax > 1, 1, mo5swLO$ymax)
+mo5swLO$ymin <- ifelse(mo5swLO$ymin < 0, 0, mo5swLO$ymin)
+mo5swLO$yearF <- as.factor(as.character(mo5swLO$year))
+
+plt_mo5swL <- ggplot() +
+  geom_line(data = mo5swLO,
+            mapping = aes(x = AgeN,
+                          y = PropMat,
+                          group = yearF,
+                          colour = yearF)) +
+  geom_ribbon(data = mo5swLO,
+            mapping = aes(x = AgeN,
+                          ymax = ymax,
+                          ymin = ymin,
+                          group = yearF,
+                          fill = yearF),
+            alpha = 0.05) +
+  geom_line(data = mo[mo$yearF == "Running Mean",],
+            mapping = aes(x = AgeN,
+                          y = PropMat,
+                          group = yearF),
+            colour = "Black",
+            linetype = 3,
+            size = 1.5) +
+  geom_errorbar(data = rmstdr,
+                mapping = aes(x = AgeN,
+                              ymax = ymax,
+                              ymin = ymin),
+                colour = "Black",
+                linetype = 3,
+                size = 1) +
+  theme_clean()+
+  scale_x_continuous(breaks = function(x) pretty(x, n = 5)) 
+
+ggplotly(plt_mo5swL)
+#=====
+```
+
+```{r eval=FALSE, fig.cap= paste0("Maturity Ogives, actual values (black) and predicted from smoother (colours); ribbons = 95% CI."), fig.height=10}
+# swalba <- melt(setDT(WAA_combsex), id.vars = "year", variable.name = "Age", value.name = "MeanWeight")
+
+
+ggplotly(ggplot() +
+           geom_line(data = mo2,
+                     mapping = aes(x = year,
+                                   y = PropMat)) +
+           geom_line(data = mo2,
+                     mapping = aes(x = year,
+                                   y = smoothPropMat,
+                                   colour = Age)) +
+           geom_ribbon(data = mo2,
+                       mapping = aes(x = year,
+                                     ymin = smoothPropMat-(1.96*seSmoothPropMat),
+                                     ymax = smoothPropMat+(1.96*seSmoothPropMat),
+                                     # colour = Age,
+                                     fill = Age),
+                       alpha = 0.15) + 
+           facet_wrap(.~Age)+
+           theme_few()+
+           theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+           scale_x_continuous(breaks = function(x) pretty(x, n = 5)) +
+           # scale_y_continuous(breaks = c(0, 0.2, 0.4, 0.6)) +
+           # coord_cartesian(ylim = c(0,0.95)) +
+    scale_color_manual(values = c(ebpal)) +
+    scale_fill_manual(values = c(ebpal))
+)
+```
+
+In plenary at the Benchmark Workshop, it was decided that the levels of maturity in the early ages of the data do not look appropriate. This could be due to bias in the sampling of the surveys, where larger fish from a given age group are more likely to be sampled in the deeper operating areas of the survey vessels.  This may also be due to the difficulty in establishing the first winter ring when ageing, leading to some larger two to three year olds being read as a year younger than they are.
+
+Because of this we can produce some ogives with ages 1, or 1 & 2 set to zero, based on expert opinion.  The stock annex calls for only Age 1 to be set to zero, post-hoc.
+
+```{r fig.cap="Five-year sliding window mean of maturity at age, with age 1 set to 0, post-hoc. Black dotted line and error bars represent the running mean method applied to the old ple.27.21-23 stock"}
+mo5swL_1zero <- mo5swL
+mo5swL_1zero[mo5swL_1zero$AgeN %in% c(1), c("PropMat", "StdErrPropMat","ymax", "ymin")] <- 0
+mo5swL_1zero$yearF <- as.factor(as.character(mo5swL_1zero$year))
+# mo5swL_1zero$Age <- factor(as.character(mo5swL_1zero$AgeN), levels = as.character(sort(unique(mo5swL_1zero$AgeN))))
+
+mo5swW_1zero <- reshape(mo5swL_1zero[, c("year", "Age", "PropMat")],
+                 timevar = "Age",
+                 idvar = "year",
+                 direction = "wide")
+colnames(mo5swW_1zero) <- gsub(pattern = "PropMat.", replacement = "", x = colnames(mo5swW_1zero))
+
+
+### Make early timeseries "NA"s into plausible value
+mo5swW_1zeroSAM <- mo5swW_1zero[mo5swW_1zero$year %in% c(2002:(DataYear+1)), c(-1)]
+mo5swW_1zeroSAM <- mo5swW_1zeroSAM[, as.character(sort(as.numeric(names(mo5swW_1zeroSAM))))]
+for(i in 1:ncol(mo5swW_1zeroSAM)){
+  for(j in 1:nrow(mo5swW_1zeroSAM)){
+    mo5swW_1zeroSAM[j, i] <- ifelse(is.na(mo5swW_1zeroSAM[j, i]), median(c(mo5swW_1zeroSAM[,i]), na.rm = T), mo5swW_1zeroSAM[j, i])
+  }
+}
+
+
+save_as_lowestoft(df = mo5swW_1zeroSAM,
+                  file_path = "Assessment Input/StockAnnex/mo.dat",
+                  title = "Maturity Ogive for Ple.27.21-32. Five year sliding window with age 1 set to 0, combined sexes, from survey data",
+                  rando_numbers = paste(c(1, 4), collapse = "\t"),
+                  year_range = paste(c(2002, (DataYear+1)), collapse = "\t"),
+                  age_range = paste(c(1, 10), collapse = "\t"),
+                  timeseries_type = 1)
+
+plt_mo5swL_1zero <- ggplot() +
+  geom_line(data = mo5swL_1zero,
+            mapping = aes(x = AgeN,
+                          y = PropMat,
+                          group = yearF,
+                          colour = yearF)) +
+  geom_ribbon(data = mo5swL_1zero,
+            mapping = aes(x = AgeN,
+                          ymax = ymax,
+                          ymin = ymin,
+                          group = yearF,
+                          fill = yearF),
+            alpha = 0.05) +
+  geom_line(data = mo[mo$yearF == "Running Mean",],
+            mapping = aes(x = AgeN,
+                          y = PropMat,
+                          group = yearF),
+            colour = "Black",
+            linetype = 3,
+            size = 1.5) +
+  geom_errorbar(data = rmstdr,
+                mapping = aes(x = AgeN,
+                              ymax = ymax,
+                              ymin = ymin),
+                colour = "Black",
+                linetype = 3,
+                size = 1) +
+  theme_clean()+
+  scale_x_continuous(breaks = function(x) pretty(x, n = 5)) 
+  
+ggplotly(plt_mo5swL_1zero)
+```
+
+
+```{r eval=FALSE, fig.cap="Five-year sliding window mean of maturity at age, with ages 1 & 2 set to 0, post-hoc."}
+mo5swL_2zero <- mo5swL
+mo5swL_2zero[mo5swL_2zero$AgeN %in% c(1,2), c("PropMat", "StdErrPropMat","ymax", "ymin")] <- 0
+mo5swL_2zero$yearF <- as.factor(as.character(mo5swL_2zero$year))
+
+plt_mo5swL_2zero <- ggplot() +
+  geom_line(data = mo5swL_2zero,
+            mapping = aes(x = AgeN,
+                          y = PropMat,
+                          group = yearF,
+                          colour = yearF)) +
+  geom_ribbon(data = mo5swL_2zero,
+            mapping = aes(x = AgeN,
+                          ymax = ymax,
+                          ymin = ymin,
+                          group = yearF,
+                          fill = yearF),
+            alpha = 0.05) +
+  geom_line(data = mo[mo$yearF == "Running Mean",],
+            mapping = aes(x = AgeN,
+                          y = PropMat,
+                          group = yearF),
+            colour = "Black",
+            linetype = 3,
+            size = 1.5) +
+  geom_errorbar(data = rmstdr,
+                mapping = aes(x = AgeN,
+                              ymax = ymax,
+                              ymin = ymin),
+                colour = "Black",
+                linetype = 3,
+                size = 1) +
+  theme_clean()+
+  scale_x_continuous(breaks = function(x) pretty(x, n = 5)) 
+  
+ggplotly(plt_mo5swL_2zero)
+```
+
+
+### Sex Ratio
+```{r fig.cap="Sex ratio over time, faceted by age."}
+sr_lng <- reshape(sex_ratio_female,
+                  varying = colnames(sex_ratio_female)[-1],
+                  v.names = "PropFemale",
+                  timevar = "Age",
+                  times = colnames(sex_ratio_female)[-1],
+                  idvar = "year",
+                  direction = "long")
+sr_lng$AgeN <- as.numeric(as.character(gsub(pattern = "a", replacement = "", x = sr_lng$Age)))
+
+ggplotly(ggplot() +
+           geom_line(data = sr_lng,
+                     mapping = aes(x = year,
+                                   y = PropFemale,
+                                   colour = Age)) +
+           facet_wrap(.~AgeN)+
+           theme_few()+
+           theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+           scale_x_continuous(breaks = function(x) pretty(x, n = 5)) +
+    scale_color_manual(values = c(ebpal)) +
+    scale_fill_manual(values = c(ebpal)) +
+      guides(colour = "none", fill = "none")
+)
+```
+
+```{r fig.cap="Sex ratios. Ages faceted by time."}
+ggplotly(ggplot(sr_lng) +
+           geom_line(mapping = aes(x = AgeN,
+                                   y = PropFemale)) +
+           geom_hline(yintercept = 0.5,
+                      linetype = 2) +
+           facet_wrap(facets = "year") +
+           scale_x_continuous(breaks = function(x) pretty(x, n = 5)) +
+           theme_few())
+```
+
+### Stock Weight At Age (SWAA)
+As for the maturity ogives, the SWAA must be calculated from the raw DATRAS Exchange products. These were read-in and cleaned in a previous section. As for the Maturity Ogives, the stock mean weights at age can be calculated in many different ways.  The stock annex calls for producing "raw", annual and time varying, mean weights.  These are annual averages based on the sampling of a given year.  These "raw", annual estimates are then used as input data to the stock assessment, where the _Biopar_ option estimates the annual values while fitting the rest of the model. 
+
+The below chunks (hidden) prepare the data, generate up-to-date SWAA for the assessment and plots a these out in figures for presentations/reporting. The fluctuating stock mean weights of the older age classes is caused by the small number of individuals caught at the surveys and the extremely high variability of weight for these age classes.  In these chunks we also produce a range of alternate stock weight estimates, just to retain the methods for things like sliding window means and/or running means, if the stock develops futher and these approaches are warranted or comparisons are asked for in the future.
+
+```{r SWAACalcs}
+#===
+# Subset processed exchange data ----
+#===
+# Select the SD and quarter
+ca_q1<-subset(ca_hh_fin_bits_ibts,Quarter==1&Age!=-9&Age!=0&Age<15)
+hl_q1<-subset(hl_hh_fin_bits_ibts,Quarter==1)
+#=====
+
+#===
+# Summarise and aggregate data ----
+#===
+# Add 1 to all rows just to be able to count the fish
+ca_q1$Nr_fish<-1
+
+# Round the length class
+ca_q1$RLngtClass<-round(ca_q1$LngtClass)
+
+# How many fish we have
+nr_fish<-aggregate(ca_q1$CANoAtLngt,
+                   by=list(ca_q1$Country,ca_q1$Quarter,ca_q1$Year),
+                   FUN="length")
+
+nr_fish<- aggregate(ca_q1$Nr_fish,
+                    by=list(ca_q1$Year,ca_q1$Sex,ca_q1$RLngtClass,ca_q1$Age),
+                    FUN="sum",
+                    na.rm=T)
+names(nr_fish)<-c("year","sex","LngtClass","age","nr_fish")
+
+# Aggregate number of fish and average weight in samples
+weight<-aggregate(ca_q1$IndWgt,
+                  by=list(ca_q1$Year,ca_q1$Sex,round(ca_q1$RLngtClass),
+                          ca_q1$Age),
+                  FUN="mean",na.rm=T)
+names(weight)<-c("year","sex","LngtClass","age","weight")
+#=====
+
+#===
+# Length Frequencies "at sea" ----
+#===
+# Set parameters for data
+lencl<-c(4:60)
+age<-c(1:10)
+year<-c(1999:(DataYear+1))
+
+# Make tables for length freq data
+length_freq_tmp<-by(hl_q1,list(hl_q1$Year,round(hl_q1$LngtClass)),function (x){
+  sum(x$HLNoAtLngt_1)
+})
+length_freq_tab<-t(as.table(length_freq_tmp))
+Lfreq_sea<-data.frame(year=rep(year, each=length(lencl)),LngtClass=rep(lencl,length(year)),HLNoLngt=NA)
+
+# Fill the table
+for (i in c(1:nrow(Lfreq_sea))){
+  year_i<-Lfreq_sea[i,names(Lfreq_sea)==as.character("year")]
+  lencl_i<-Lfreq_sea[i,names(Lfreq_sea)==as.character("LngtClass")]
+  
+  if(lencl_i%in%c(as.numeric(dimnames(length_freq_tab)[[1]]))){
+    
+    data_i<-length_freq_tab[as.numeric(dimnames(length_freq_tab)[[1]])==lencl_i,dimnames(length_freq_tab)[[2]]==year_i]
+    Lfreq_sea[i,names(Lfreq_sea)==as.character("HLNoLngt")]<-data_i
+    
+  }else{
+    Lfreq_sea[i,names(Lfreq_sea)==as.character("HLNoLngt")]<-0       
+  }
+}
+
+# replace NA with 0
+Lfreq_sea[which(is.na(Lfreq_sea$HLNoLngt)),names(Lfreq_sea)==as.character("HLNoLngt")]<-0
+
+#=====
+
+#===
+# Summary of sampled fish: weight by length and by age ----
+#===
+# Number of samples
+## Make tables  
+nr_fish_samp_F<-data.frame(year=rep(year, each=length(lencl)),LngtClass=rep(lencl,length(year)), a1=NA,a2=NA,a3=NA,a4=NA,a5=NA,a6=NA,a7=NA,a8=NA,a9=NA,a10=NA)
+nr_fish_samp_M<-nr_fish_samp_F
+
+wgt_samp_F<-nr_fish_samp_F
+wgt_samp_M<-nr_fish_samp_M
+
+## Filling the tables: 
+### Female  
+for (i in 1:nrow( nr_fish_samp_F)){
+  for (j in 3:ncol( nr_fish_samp_F)){
+    year_i<-nr_fish_samp_F[i,names(nr_fish_samp_F)==as.character("year")]
+    lencl_i<-nr_fish_samp_F[i,names(nr_fish_samp_F)==as.character("LngtClass")]
+    age_i<-j-2
+    
+    if(lencl_i%in% weight[which(weight$year==year_i&weight$sex==as.character("F")& weight$age==age_i),names(weight)==as.character("LngtClass")]){
+      
+      show_wgt<-weight[which(weight$year==year_i&weight$LngtClass==lencl_i&weight$sex==as.character("F")&weight$age==age_i),]
+      show_nr<-nr_fish[which(nr_fish$year==year_i&nr_fish$LngtClass==lencl_i&nr_fish$sex==as.character("F")&nr_fish$age==age_i),]
+      
+      nr_fish_samp_F[i,j]<-sum(show_nr$nr_fish)
+      wgt_samp_F[i,j]<-mean(show_wgt$weight, na.rm=T)
+      
+    } else{              
+      nr_fish_samp_F[i,j]<-0
+      wgt_samp_F[i,j]<-NA
+    }
+  }
+}
+
+### Male
+for (i in 1:nrow( nr_fish_samp_M)){
+  for (j in 3:ncol( nr_fish_samp_M)){
+    year_i<-nr_fish_samp_M[i,names(nr_fish_samp_M)==as.character("year")]
+    lencl_i<-nr_fish_samp_M[i,names(nr_fish_samp_M)==as.character("LngtClass")]
+    age_i<-j-2
+    
+    if(lencl_i%in% weight[which(weight$year==year_i&weight$sex==as.character("M")& weight$age==age_i),names(weight)==as.character("LngtClass")]){
+      
+      show_wgt<-weight[which(weight$year==year_i&weight$LngtClass==lencl_i&weight$sex==as.character("M")&weight$age==age_i),]
+      show_nr<-nr_fish[which(nr_fish$year==year_i&nr_fish$LngtClass==lencl_i&nr_fish$sex==as.character("M")&nr_fish$age==age_i),]
+      
+      nr_fish_samp_M[i,j]<-sum(show_nr$nr_fish)
+      wgt_samp_M[i,j]<-mean(show_wgt$weight, na.rm=T)
+      
+    } else{              
+      nr_fish_samp_M[i,j]<-0
+      wgt_samp_M[i,j]<-NA
+    }
+  }
+}
+
+# Number of fish sampled by length class:
+## Female
+nr_fish_samp_F$tot<-NA
+
+for (i in 1:nrow(nr_fish_samp_F)){
+  nr_fish_samp_F[i,names(nr_fish_samp_F)==as.character("tot")]<-sum(nr_fish_samp_F[i,names(nr_fish_samp_F)%in%c("a1","a2","a3","a4","a5","a6","a7","a8","a9","a10")])
+}
+
+##  Male        
+nr_fish_samp_M$tot<-NA
+
+for (i in 1:nrow(nr_fish_samp_M)){
+  nr_fish_samp_M[i,names(nr_fish_samp_M)==as.character("tot")]<-sum(nr_fish_samp_M[i,names(nr_fish_samp_M)%in%c("a1","a2","a3","a4","a5","a6","a7","a8","a9","a10")])
+}
+
+## F and M combined
+Lfreq_samp<-data.frame(year=rep(year, each=length(lencl)),LngtClass=rep(lencl,length(year)), tot_samp=NA)
+
+for (i in 1:nrow(Lfreq_samp)){
+  year_i<-Lfreq_samp[i,names(Lfreq_samp)==as.character("year")]
+  lencl_i<-Lfreq_samp[i,names(Lfreq_samp)==as.character("LngtClass")]
+  
+  F_sum<-nr_fish_samp_F[which(nr_fish_samp_F$year==year_i&nr_fish_samp_F$LngtClass==lencl_i),names(nr_fish_samp_F)==as.character("tot")]
+  M_sum<-nr_fish_samp_M[which(nr_fish_samp_M$year==year_i&nr_fish_samp_M$LngtClass==lencl_i),names(nr_fish_samp_M)==as.character("tot")]
+  
+  Lfreq_samp[i,names(Lfreq_samp)==as.character("tot_samp")] <-F_sum+ M_sum 
+}  
+
+# Number of fish sampled by age:
+## Make tables
+tot_samp_age_F<-data.frame(year=year,a1=NA,a2=NA,a3=NA,a4=NA,a5=NA,a6=NA,a7=NA,a8=NA,a9=NA,a10=NA)
+tot_samp_age_M<-data.frame(year=year,a1=NA,a2=NA,a3=NA,a4=NA,a5=NA,a6=NA,a7=NA,a8=NA,a9=NA,a10=NA)  
+
+## Female
+for (i in 1:nrow(tot_samp_age_F)){
+  for (j in 2:ncol(tot_samp_age_F)){ 
+    
+    year_i<-tot_samp_age_F[i,names(tot_samp_age_F)==as.character("year")]
+    show_data<- nr_fish_samp_F[which(nr_fish_samp_F$year==year_i),]
+    
+    tot_samp_age_F[i,j]<-sum(show_data[,names(show_data)==names(tot_samp_age_F)[j]])
+  } 
+}
+
+## Male
+for (i in 1:nrow(tot_samp_age_M)){
+  for (j in 2:ncol(tot_samp_age_M)){ 
+    
+    year_i<-tot_samp_age_M[i,names(tot_samp_age_M)==as.character("year")]
+    show_data<- nr_fish_samp_M[which(nr_fish_samp_M$year==year_i),]
+    
+    tot_samp_age_M[i,j]<-sum(show_data[,names(show_data)==names(tot_samp_age_M)[j]])
+  } 
+}
+#=====
+
+#===
+# Sex Ratios ----
+#===
+# Make tables
+sex_ratio_F<- tot_samp_age_F
+sex_ratio_F[,-1]<-NA
+
+# Fill tables
+for (i in 1:nrow(sex_ratio_F)){
+  for (j in 2:ncol(sex_ratio_F)){
+    sex_ratio_F[i,j]<-tot_samp_age_F[i,j]/(tot_samp_age_F[i,j]+tot_samp_age_M[i,j])
+  }
+}
+#=====
+
+#===
+# Full survey numbers for raising ----
+#===
+# Make Tables
+nr_fish_sea_M<-nr_fish_samp_M
+nr_fish_sea_M[,-(1:2)]<-NA
+nr_fish_sea_F<-nr_fish_sea_M
+
+## Female
+for (i in 1:nrow(nr_fish_sea_F)){
+  for (j in 3:(ncol(nr_fish_sea_F)-1)){
+    if(nr_fish_samp_F$tot[i]>0&!is.na(Lfreq_sea$HLNoLngt[i])){
+      
+      pct_age_tot<-nr_fish_samp_F[i,j]/nr_fish_samp_F[i,names(nr_fish_samp_F)==as.character("tot")]   
+      F_M_ratio<-nr_fish_samp_F[i,names(nr_fish_samp_F)==as.character("tot")]/Lfreq_samp$tot_samp[i]
+      Lfreq<-Lfreq_sea$HLNoLngt[i]
+      
+      nr_fish_sea_F[i,j]<-pct_age_tot*Lfreq* F_M_ratio
+    }else{
+      nr_fish_sea_F[i,j]<-0 
+    }
+  }
+}           
+
+## Male
+for (i in 1:nrow(nr_fish_sea_M)){
+  for (j in 3:(ncol(nr_fish_sea_M)-1)){
+    if(nr_fish_samp_M$tot[i]>0&!is.na(Lfreq_sea$HLNoLngt[i])){
+      
+      pct_age_tot<-nr_fish_samp_M[i,j]/nr_fish_samp_M[i,names(nr_fish_samp_M)==as.character("tot")]   
+      M_F_ratio<-nr_fish_samp_M[i,names(nr_fish_samp_M)==as.character("tot")]/Lfreq_samp$tot_samp[i]
+      Lfreq<-Lfreq_sea$HLNoLngt[i]
+      
+      nr_fish_sea_M[i,j]<-pct_age_tot*Lfreq* M_F_ratio
+    }else{
+      nr_fish_sea_M[i,j]<-0 
+    }
+  }
+}           
+
+# Sum of numbers over age-groups, by length
+## Females
+for (i in 1:nrow(nr_fish_sea_F)){
+  nr_fish_sea_F[i,names(nr_fish_sea_F)==as.character("tot")]<-sum(nr_fish_sea_F[i,names(nr_fish_sea_F)%in%c("a1","a2","a3","a4","a5","a6","a7","a8","a9","a10")])   
+}    
+## Males
+for (i in 1:nrow(nr_fish_sea_M)){
+  nr_fish_sea_M[i,names( nr_fish_sea_M)==as.character("tot")]<-sum(nr_fish_sea_M[i,names(nr_fish_sea_M)%in%c("a1","a2","a3","a4","a5","a6","a7","a8","a9","a10")])   
+}  
+
+# Sum of numbers over length-groups, by age
+## Make tables
+sum_nr_fish_sea_F<-tot_samp_age_F
+sum_nr_fish_sea_F[,-1]<-NA
+sum_nr_fish_sea_M<-sum_nr_fish_sea_F
+
+## Females
+for (i in 1:nrow(sum_nr_fish_sea_F)){ 
+  for (j in 2:ncol(sum_nr_fish_sea_F)){ 
+    year_i<-sum_nr_fish_sea_F[i,names(sum_nr_fish_sea_F)==as.character("year")]
+    sum_nr_fish_sea_F[i,j]<-sum(nr_fish_sea_F[which(nr_fish_sea_F$year==year_i),names(nr_fish_sea_F)==names(sum_nr_fish_sea_F)[j]]) 
+  } 
+}
+
+## Males
+for (i in 1:nrow(sum_nr_fish_sea_M)){ 
+  for (j in 2:ncol(sum_nr_fish_sea_M)){ 
+    year_i<-sum_nr_fish_sea_M[i,names(sum_nr_fish_sea_M)==as.character("year")]
+    sum_nr_fish_sea_M[i,j]<-sum(nr_fish_sea_M[which(nr_fish_sea_M$year==year_i),names(nr_fish_sea_M)==names(sum_nr_fish_sea_M)[j]]) 
+  } 
+}
+
+#=====
+
+#===
+# Raise proportions to full survey numbers ----
+#===
+# Make tables
+wgt_nr_F<-nr_fish_sea_F
+wgt_nr_F[,3:ncol(wgt_nr_F)]<-NA
+wgt_nr_M<-wgt_nr_F
+
+## Female
+for (i in 1:nrow(wgt_nr_F)){
+  for (j in 3:(ncol(wgt_nr_F)-1)) {
+    if(nr_fish_sea_F[i,j]>0&!is.na(wgt_samp_F[i,j])){
+      wgt<-wgt_samp_F[i,j]
+      nr<-nr_fish_sea_F[i,j]
+      wgt_nr_F[i,j]<-wgt*nr
+    }else{
+      wgt_nr_F[i,j]<-0
+    }
+  }
+}   
+
+## Male
+for (i in 1:nrow(wgt_nr_M)){
+  for (j in 3:(ncol(wgt_nr_M)-1)) {
+    if(nr_fish_sea_M[i,j]>0&!is.na(wgt_samp_M[i,j])){
+      wgt<-wgt_samp_M[i,j]
+      nr<-nr_fish_sea_M[i,j]
+      wgt_nr_M[i,j]<-wgt*nr
+    }else{
+      wgt_nr_M[i,j]<-0
+    }
+  }
+} 
+
+# Sum weights by age over length classes
+## Make Tables
+sum_wgt_nr_F<-tot_samp_age_F
+sum_wgt_nr_F[,-1]<-NA
+sum_wgt_nr_M<-sum_wgt_nr_F
+
+## Females
+for (i in 1:nrow(sum_wgt_nr_F)){ 
+  for (j in 2:ncol(sum_wgt_nr_F)){ 
+    year_i<-sum_wgt_nr_F[i,names(sum_wgt_nr_F)==as.character("year")]
+    sum_wgt_nr_F[i,j]<-sum(wgt_nr_F[which(wgt_nr_F$year==year_i),names(wgt_nr_F)==names(sum_wgt_nr_F)[j]]) 
+  } 
+}
+
+## Males
+for (i in 1:nrow(sum_wgt_nr_M)){ 
+  for (j in 2:ncol(sum_wgt_nr_M)){ 
+    year_i<-sum_wgt_nr_M[i,names(sum_wgt_nr_M)==as.character("year")]
+    sum_wgt_nr_M[i,j]<-sum(wgt_nr_M[which(wgt_nr_M$year==year_i),names(wgt_nr_M)==names(sum_wgt_nr_M)[j]]) 
+  } 
+}
+#=====
+
+#=== 
+# Stock mean weight at age ----
+#===
+# Make Tables
+WAA_F<-sum_wgt_nr_F
+WAA_F[,-1]<-NA
+WAA_M<-WAA_F
+WAA_combsex<-WAA_M
+
+## Females
+for (i in 1:nrow(WAA_F)){
+  for (j in 2:ncol(WAA_F)){
+    WAA_F[i,j]<-sum_wgt_nr_F[i,j]/sum_nr_fish_sea_F[i,j]
+  }
+}
+
+## Males
+for (i in 1:nrow(WAA_M)){
+  for (j in 2:ncol(WAA_M)){
+    WAA_M[i,j]<-sum_wgt_nr_M[i,j]/sum_nr_fish_sea_M[i,j]
+  }
+}
+
+## comb of F and M
+for (i in 1:nrow(WAA_combsex)){ 
+  for (j in 2:ncol(WAA_combsex)){ 
+    if( !is.na(WAA_F[i,j])&!is.na(WAA_M[i,j])){
+      WAA_combsex[i,j]<-(WAA_F[i,j]*sex_ratio_F[i,j])+(WAA_M[i,j]*(1-sex_ratio_F[i,j]))
+    }
+    if(is.na(WAA_F[i,j])&!is.na(WAA_M[i,j])){
+      WAA_combsex[i,j]<-WAA_M[i,j]
+    }
+    if(is.na(WAA_M[i,j])&!is.na(WAA_F[i,j])){
+      WAA_combsex[i,j]<-WAA_F[i,j]    
+    }
+  }
+}
+
+## Convert weights to kg, not grams
+WAA_combsex <- WAA_combsex/1000
+WAA_combsex$year <- WAA_combsex$year*1000
+WAA_combsex$year <- as.integer(as.character(WAA_combsex$year))
+
+#=====
+
+#===
+# Reshape WAA data and calculate means +/- 95%CI  for plotting  ----
+#===
+# Wide to long format
+swaal <- reshape(WAA_combsex,
+                 varying = colnames(WAA_combsex)[-1],
+                 v.names = "MeanWeight",
+                 timevar = "Age",
+                 times = colnames(WAA_combsex)[-1],
+                 idvar = "year",
+                 direction = "long")
+
+
+
+## Calculate mean swaa for 1999:2019 ----
+m19WAA <- aggregate(MeanWeight ~ Age,
+                    data = swaal[swaal$year %in% c(1999:2019),],
+                    FUN = mean)
+
+# Calculate std err around the above mean 1999:2019
+mw19stdr <- aggregate(MeanWeight ~ Age,
+                      data = swaal[swaal$year %in% c(1999:2019), ],
+                      FUN = function(x){sd(x, na.rm = TRUE)/sqrt(length(na.omit(x)))})
+mw19stdr$AgeN <- as.numeric(sub(pattern = "a", replacement = "", x = mw19stdr$Age))
+colnames(mw19stdr)[colnames(mw19stdr) %in% c("MeanWeight")] <- "StdErr"
+mw19stdr$MeanWeight <- m19WAA$MeanWeight
+mw19stdr$ymax <- mw19stdr$MeanWeight + 1.96*mw19stdr$StdErr
+mw19stdr$ymin <- mw19stdr$MeanWeight - 1.96*mw19stdr$StdErr
+m19WAA$year <- as.factor(rep("Mean 1999-2019", n = nrow(m19WAA)))
+mw19stdr <- mw19stdr[order(mw19stdr$AgeN), ]
+
+## Calculate previous 3 year mean ----
+m3WAA <- aggregate(MeanWeight ~ Age,
+                   data = swaal[swaal$year %in% c(((DataYear+1)-2):(DataYear+1)),],
+                   FUN = mean)
+
+# Calculate std err around the above 3 year mean
+m3wstdr <- aggregate(MeanWeight ~ Age,
+                     data = swaal[swaal$year %in% c(((DataYear+1)-2):(DataYear+1)), ],
+                     FUN = function(x){sd(x, na.rm = TRUE)/sqrt(length(na.omit(x)))})
+m3wstdr$AgeN <- as.numeric(sub(pattern = "a", replacement = "", x = m3wstdr$Age))
+colnames(m3wstdr)[colnames(m3wstdr) %in% c("MeanWeight")] <- "StdErr"
+m3wstdr$MeanWeight <- m3WAA$MeanWeight
+m3wstdr$ymax <- m3wstdr$MeanWeight + 1.96*m3wstdr$StdErr
+m3wstdr$ymin <- m3wstdr$MeanWeight - 1.96*m3wstdr$StdErr
+m3WAA$year <- as.factor(rep("3y Mean", n = nrow(m3WAA)))
+m3wstdr <- m3wstdr[order(m3wstdr$AgeN), ]
+
+
+## Calculate mean of 1999 to current year ----
+rmWAA <- aggregate(MeanWeight ~ Age,
+                   data = swaal[swaal$year %in% c(1999:(DataYear+1)),],
+                   FUN = mean)
+
+# Standard error of 1999 -> mean
+rmwstdr <- aggregate(MeanWeight ~ Age,
+                     data = swaal[swaal$year %in% c(1999:(DataYear+1)), ],
+                     FUN = function(x){sd(x, na.rm = TRUE)/sqrt(length(na.omit(x)))})
+rmwstdr$AgeN <- as.numeric(sub(pattern = "a", replacement = "", x = rmwstdr$Age))
+colnames(rmwstdr)[colnames(rmwstdr) %in% c("MeanWeight")] <- "StdErr"
+rmwstdr$MeanWeight <- rmWAA$MeanWeight
+rmwstdr$ymax <- rmwstdr$MeanWeight + 1.96*rmwstdr$StdErr
+rmwstdr$ymin <- rmwstdr$MeanWeight - 1.96*rmwstdr$StdErr
+rmWAA$year <- as.factor(rep("Running Mean", n = nrow(rmWAA)))
+rmwstdr <- rmwstdr[order(rmwstdr$AgeN), ]
+
+# Combine all years, 2002 -> mean and 15 year mean into one object
+swaal <- rbind(swaal, m19WAA, rmWAA, m3WAA)
+swaal$AgeN <- as.numeric(sub(pattern = "a", replacement = "", x = swaal$Age))
+swaal <- swaal[order(swaal$AgeN), ]
+swaal$yearF <- as.factor(as.character(swaal$year))
+
+## Calculate 3y sliding window average for whole timeseries ----
+### Calculate the mean ----
+ada <- an(3, nrow(WAA_combsex))
+sw3sw <- frollmean(WAA_combsex[, -1], n=ada, na.rm = T, align = "right", adaptive = TRUE)
+sw3sw <- as.data.frame(do.call(cbind, sw3sw))
+sw3sw$year <- WAA_combsex$year
+
+#### Wide to long format
+sw3swL <- reshape(sw3sw,
+                 varying = colnames(sw3sw)[-11],
+                 v.names = "MeanWeight",
+                 timevar = "Age",
+                 times = colnames(sw3sw)[-11],
+                 idvar = "year",
+                 direction = "long")
+sw3swL$Age <- as.numeric(gsub(pattern = "V", replacement = "", x = sw3swL$Age))
+
+### Calcualte the standard error ----
+sw3stdr <- frollapply(WAA_combsex[, -1],
+                      3,
+                      FUN = function(x){sd(x, na.rm = TRUE)/sqrt(length(na.omit(x)))})
+sw3stdr <- as.data.frame(do.call(cbind, sw3stdr))
+sw3stdr$year <- WAA_combsex$year
+
+#### Wide to long format
+sw3stdrL <- reshape(sw3stdr,
+                    varying = colnames(sw3stdr)[-11],
+                    v.names = "StdErrWeight",
+                    timevar = "Age",
+                    times = colnames(sw3stdr)[-11],
+                    idvar = "year",
+                    direction = "long")
+sw3stdrL$Age <- as.numeric(gsub(pattern = "V", replacement = "", x = sw3stdrL$Age))
+
+### Calculate 95% confidence intervals ----
+sw3swL <- merge(x = sw3swL, y = sw3stdrL, by = c("year", "Age"), all.x = TRUE)
+sw3swL$ymax <- sw3swL$MeanWeight + (1.96*sw3swL$StdErrWeight)
+sw3swL$ymin <- sw3swL$MeanWeight - (1.96*sw3swL$StdErrWeight)
+sw3swL$AgeN <- sw3swL$Age
+sw3swL$Age <- as.character(sw3swL$Age)
+sw3swL$year <- as.numeric(sw3swL$year)
+sw3swL$yearF <- as.factor(as.character(sw3swL$year))
+
+
+## Calculate 5y sliding window average for whole timeseries ----
+### Calculate the mean ----
+ada <- an(5, nrow(WAA_combsex))
+sw5sw <- frollmean(WAA_combsex[, -1], n = ada, na.rm = T, align = "right", adaptive = TRUE)
+sw5sw <- as.data.frame(do.call(cbind, sw5sw))
+sw5sw$year <- WAA_combsex$year
+
+#### Wide to long format
+sw5swL <- reshape(sw5sw,
+                  varying = colnames(sw5sw)[-11],
+                  v.names = "MeanWeight",
+                  timevar = "Age",
+                  times = colnames(sw5sw)[-11],
+                  idvar = "year",
+                  direction = "long")
+sw5swL$Age <- as.numeric(gsub(pattern = "V", replacement = "", x = sw5swL$Age))
+
+### Calcualte the standard error ----
+sw5stdr <- frollapply(WAA_combsex[, -1],
+                      5,
+                      FUN = function(x){sd(x, na.rm = TRUE)/sqrt(length(na.omit(x)))})
+sw5stdr <- as.data.frame(do.call(cbind, sw5stdr))
+sw5stdr$year <- WAA_combsex$year
+sw5stdr[sw5stdr$year == 2002, -ncol(sw5stdr)] <- sw5stdr[sw5stdr$year == 2003, -ncol(sw5stdr)]
+
+#### Wide to long format
+sw5stdrL <- reshape(sw5stdr,
+                    varying = colnames(sw5stdr)[-11],
+                    v.names = "StdErrWeight",
+                    timevar = "Age",
+                    times = colnames(sw5stdr)[-11],
+                    idvar = "year",
+                    direction = "long")
+sw5stdrL$Age <- as.numeric(gsub(pattern = "V", replacement = "", x = sw5stdrL$Age))
+
+### Calculate 95% confidence intervals ----
+sw5swL <- merge(x = sw5swL, y = sw5stdrL, by = c("year", "Age"), all.x = TRUE)
+sw5swL$ymax <- sw5swL$MeanWeight + (1.96*sw5swL$StdErrWeight)
+sw5swL$ymin <- sw5swL$MeanWeight - (1.96*sw5swL$StdErrWeight)
+sw5swL$AgeN <- sw5swL$Age
+sw5swL$Age <- as.character(sw5swL$Age)
+sw5swL$year <- as.numeric(sw5swL$year)
+sw5swL$yearF <- as.factor(as.character(sw5swL$year))
+
+## Calculate annual values from a smoothing spline ----
+### Build the spline
+swaal2 <- swaal[!swaal$year %in% c("Mean 1999-2019", "Running Mean", "3y Mean"),]
+swaal2$Age <- as.factor(swaal2$Age)
+swaal2$year <- as.numeric(swaal2$year)
+msw <- gam(formula = MeanWeight ~ s(year, bs = "cr", by = Age), data = swaal2, family = gaussian(link = "identity"))
+
+### Predict with the smoothed spline
+predweights <- predict.gam(msw, newdata = swaal2,type = "response", se.fit = TRUE)
+swaal2$smoothMeanWeights <- unname(predweights$fit)
+swaal2$seSmoothMeanWeights <- unname(predweights$se.fit)
+#=====
+
+#===
+# save results
+#====
+write.csv(WAA_combsex,file="DataProcessed/BiologicalData/ple.27.21-32_StockWeightAtAge_1999-DataYear.csv")
+# save_as_lowestoft Annaul Estimates
+WAA_combsexSAM <- as.data.frame(WAA_combsex)
+
+### save_as_lowestoft Mean 2002-DataYear
+mWAA <- data.frame(lapply(colMeans(WAA_combsex[WAA_combsex$year %in% c(2002:(DataYear+1)), !colnames(WAA_combsex) %in% ("year")], na.rm = TRUE), type.convert), stringsAsFactors=FALSE)
+
+save_as_lowestoft(df = mWAA, #[, !colnames(mWAA) %in% "Age"],
+                  file_path = "Assessment Input/AlternateModel_TimeInvariant/sw.dat",
+                  title = "Stock weights at age for Ple.27.21-32. Mean values for combined sexes 2002 to data year, from survey data",
+                  rando_numbers = paste(c(1, 4), collapse = "\t"),
+                  year_range = paste(c(2002, (DataYear+1)), collapse = "\t"),
+                  age_range = paste(c(1, 10), collapse = "\t"),
+                  timeseries_type = 2)
+
+### save_as_lowestoft Raw Annual Estimates
+
+#### old removal of NAs
+# for(i in 1:ncol(WAA_combsexSAM)){
+#   for(j in 1:nrow(WAA_combsexSAM)){
+#     WAA_combsexSAM[j, i] <- ifelse(is.na(WAA_combsexSAM[j, i]), -9, WAA_combsexSAM[j, i])
+#   }
+# }
+
+#### Make early timeseries "NA"s into plausible value
+for(i in 1:ncol(WAA_combsexSAM)){
+  for(j in 1:nrow(WAA_combsexSAM)){
+    WAA_combsexSAM[j, i] <- ifelse(is.na(WAA_combsexSAM[j, i]), median(c(WAA_combsexSAM[,i]), na.rm = T), WAA_combsexSAM[j, i])
+  }
+}
+
+save_as_lowestoft(df = WAA_combsexSAM[WAA_combsexSAM$year %in% 2002:(DataYear+1), !colnames(WAA_combsexSAM) %in% "year"],
+                  file_path = "Assessment Input/StockAnnex/sw.dat",
+                  title = "Stock weights at age for Ple.27.21-32. Annual values for combined sexes, from survey data",
+                  rando_numbers = paste(c(1, 4), collapse = "\t"),
+                  year_range = paste(c(2002, (DataYear+1)), collapse = "\t"),
+                  age_range = paste(c(1, 10), collapse = "\t"))
+
+### save_as_lowestoft Three Year Sliding Window
+sw3swSAM <- as.data.frame(sw3sw)
+
+# for(i in 1:ncol(sw3swSAM)){
+#   for(j in 1:nrow(sw3swSAM)){
+#     sw3swSAM[j, i] <- ifelse(is.na(sw3swSAM[j, i]), -9, sw3swSAM[j, i])
+#   }
+# }
+
+#### Make early timeseries "NA"s into plausible value
+for(i in 1:ncol(sw3swSAM)){
+  for(j in 1:nrow(sw3swSAM)){
+    sw3swSAM[j, i] <- ifelse(is.na(sw3swSAM[j, i]), median(c(sw3swSAM[,i]), na.rm = T), sw3swSAM[j, i])
+  }
+}
+
+save_as_lowestoft(df = sw3swSAM[sw3swSAM$year %in% 2002:(DataYear+1), !colnames(sw3swSAM) %in% "year"],
+                  file_path = "Assessment Input/AlternateModel_3ysw/sw.dat",
+                  title = "Stock weights at age for Ple.27.21-32. Three year sliding window means for combined sexes, from survey data",
+                  rando_numbers = paste(c(1, 4), collapse = "\t"),
+                  year_range = paste(c(2002, (DataYear+1)), collapse = "\t"),
+                  age_range = paste(c(1, 10), collapse = "\t"))
+
+### save_as_lowestoft Five Year Sliding Window
+sw5swSAM <- as.data.frame(sw5sw)
+
+# for(i in 1:ncol(sw5swSAM)){
+#   for(j in 1:nrow(sw5swSAM)){
+#     sw5swSAM[j, i] <- ifelse(is.na(sw5swSAM[j, i]), -9, sw5swSAM[j, i])
+#   }
+# }
+
+#### Make early timeseries "NA"s into plausible value
+for(i in 1:ncol(sw5swSAM)){
+  for(j in 1:nrow(sw5swSAM)){
+    sw5swSAM[j, i] <- ifelse(is.na(sw5swSAM[j, i]), median(c(sw5swSAM[,i]), na.rm = T), sw5swSAM[j, i])
+  }
+}
+
+save_as_lowestoft(df = sw5swSAM[sw5swSAM$year %in% 2002:(DataYear+1), !colnames(sw5swSAM) %in% "year"],
+                  file_path = "Assessment Input/AlternateModel_5ysw/sw.dat",
+                  title = "Stock weights at age for Ple.27.21-32. Five year sliding window means for combined sexes, from survey data",
+                  rando_numbers = paste(c(1, 4), collapse = "\t"),
+                  year_range = paste(c(2002, (DataYear+1)), collapse = "\t"),
+                  age_range = paste(c(1, 10), collapse = "\t"))
+
+### save_as_lowestoft spline-smoothed
+swaa2 <- reshape(swaal2[, c("year", "Age", "smoothMeanWeights")],
+                 varying = colnames(WAA_combsex)[-1],
+                 v.names = "smoothMeanWeights",
+                 timevar = "Age",
+                 idvar = "year",
+                 direction = "wide")
+
+# for(i in 2:ncol(swaa2)){
+#   for(j in 2:nrow(swaa2)){
+#     swaa2[j, i] <- ifelse(is.na(swaa2[j, i]), -9, swaa2[j, i])
+#     swaa2[j, i] <- ifelse((swaa2[j, i]>= 0), -9, swaa2[j, i])
+#   }
+# }
+
+#### Make early timeseries "NA"s into plausible value
+for(i in 1:ncol(swaa2)){
+  for(j in 1:nrow(swaa2)){
+    swaa2[j, i] <- ifelse(is.na(swaa2[j, i]), median(c(swaa2[,i]), na.rm = T), swaa2[j, i])
+    swaa2[j, i] <- ifelse((swaa2[j, i]>1), 1, swaa2[j, i])
+  }
+}
+
+save_as_lowestoft(df = swaa2[swaa2$year %in% c(2002:(DataYear+1)), ],
+                  file_path = "Assessment Input/AlternateModel_SSbio/sw.dat",
+                  title = "Stock weights at age for Ple.27.21-32. Smooth Spline for combined sexes, from survey data",
+                  rando_numbers = paste(c(1, 4), collapse = "\t"),
+                  year_range = paste(c(2002, (DataYear+1)), collapse = "\t"),
+                  age_range = paste(c(1, 10), collapse = "\t"))
+
+
+# saveRDS(swaal, file = "Biological Data/Ple.27.21-23_swaal.RDS")
+# saveRDS(mw19stdr, file("Biological Data/Ple.27.21-23_SWAA_AveStdErr_1999-2019.RDS"))
+# saveRDS(rmwstdr, file("Biological Data/Ple.27.21-23_SWAA_AveStdErr_1999-DataYear.RDS"))
+# saveRDS(m3wstdr, file("Biological Data/Ple.27.21-23_SWAA_AveStdErr_3yr.RDS"))
+#=====
+
+k <- append(k, c("WAA_combsex", "swaal", "swaal2", "mw19stdr", "rmwstdr", "m3wstdr", "sw3swL", "sw5swL", "sw_annual_raw", "sex_ratio_F"))
+# rm(list = ls()[!ls() %in% k])
+```
+
+
+```{r eval=FALSE, SWAATableRM}
+#===
+# Table of SWAA from stock annex
+#====
+kable(swaal[swaal$year == "Running Mean", c("AgeN", "MeanWeight")],
+      caption = "Static Stock Weight-at-age from mean of timeseries, according to ple.27.21-23 stock annex.")
+#=====
+```
+
+```{r eval=FALSE, SWAATableSplit}
+#===
+# Data Prep
+#====
+mw19stdr$cat <- "mw1999_2019"
+awCurrent <- swaal[swaal$year %in% c(2020:DataYear+1), ]
+awCurrent$cat <- as.character(awCurrent$year)
+awCurrent$StdErr <- NA
+awCurrent$ymax <- NA
+awCurrent$ymin <- NA
+years <- rep(1999:2019, 10)[order(rep(1999:2019, 10))]
+mw19_19 <- data.frame(year = years,
+                      AgeN = rep(1:10, length(1999:2019)),
+                      MeanWeight = rep(mw19stdr$MeanWeight, length(1999:2019)),
+                      ymin = rep(mw19stdr$ymin, length(1999:2019)),
+                      ymax = rep(mw19stdr$ymax, length(1999:2019)),
+                      StdErr = rep(mw19stdr$StdErr, length(1999:2019)))
+swaasepLong <- rbind(mw19_19, awCurrent[, colnames(awCurrent)[colnames(awCurrent) %in% colnames(mw19_19)]])
+
+swaasepSAM <- dcast(data = swaasepLong[, c("year", "AgeN", "MeanWeight")],
+                    formula = year ~ AgeN,
+                    value.var = "MeanWeight")
+# write.csv(swaasepSAM, file = "Biological Data/Ple.27.21-32_SWAA_Ave1999-2019_Value2020-Current.csv")
+#====
+#===
+# Table of SWAA for Assessment
+#====
+kable(swaasepSAM,
+      caption = "Stock weight-at-age with mean values applied for 1999:2019 and observed values for 2020 onwards.")
+#=====
+```
+
+```{r fig.cap= paste0("Stock weight at age by year, over time."), fig.height=10}
+swalba <- melt(setDT(WAA_combsex), id.vars = "year", variable.name = "Age", value.name = "MeanWeight")
+
+ggplotly(ggplot() +
+  geom_line(data = swalba,
+            mapping = aes(x = year,
+                          y = MeanWeight)) +
+  facet_wrap(.~Age)+
+  theme_few()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+  scale_x_continuous(breaks = function(x) pretty(x, n = 5)) +
+  scale_y_continuous(breaks = c(0, 0.2, 0.4, 0.6)) +
+  coord_cartesian(ylim = c(0,0.6))
+)
+```
+
+```{r fig.cap= paste0("Stock weight at age by year, over time, all in one panel (FOR JESPER).")}
+ggplotly(ggplot() +
+  geom_line(data = swalba,
+            mapping = aes(x = year,
+                          y = MeanWeight,
+                          colour = Age)) +
+  theme_few()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+  scale_x_continuous(breaks = function(x) pretty(x, n = 5)) +
+  scale_y_continuous(breaks = c(0, 0.2, 0.4, 0.6, 0.8)) +
+  coord_cartesian(ylim = c(0,0.8))+
+    scale_color_manual(values = c("#000000", ebpal))
+)
+
+```
+
+```{r eval=FALSE, fig.cap= paste0("Stock weight at age by year, over time, estimated from smoothed splines by age.")}
+ggplotly(ggplot() +
+  geom_line(data = swaal2,
+            mapping = aes(x = year,
+                          y = smoothMeanWeights,
+                          colour = Age)) +
+  geom_ribbon(data = swaal2,
+              mapping = aes(x = year,
+                            ymin = smoothMeanWeights-(1.96*seSmoothMeanWeights),
+                            ymax = smoothMeanWeights+(1.96*seSmoothMeanWeights),
+                            # colour = Age,
+                            fill = Age),
+              alpha = 0.15) + 
+  theme_few()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+  scale_x_continuous(breaks = function(x) pretty(x, n = 5)) +
+  scale_y_continuous(breaks = c(0, 0.2, 0.4, 0.6, 0.8)) +
+  coord_cartesian(ylim = c(0,0.95))+
+    scale_color_manual(values = c(ebpal)) +
+    scale_fill_manual(values = c(ebpal))
+)
+
+```
+
+```{r eval=FALSE, fig.cap= paste0("Stock weight at age by year, over time, actual values (black) and predicted from smoother (colours); ribbons = 95% CI."), fig.height=10}
+swalba <- melt(setDT(WAA_combsex), id.vars = "year", variable.name = "Age", value.name = "MeanWeight")
+
+
+ggplotly(ggplot() +
+           geom_line(data = swalba,
+                     mapping = aes(x = year,
+                                   y = MeanWeight)) +
+           geom_line(data = swaal2,
+                     mapping = aes(x = year,
+                                   y = smoothMeanWeights,
+                                   colour = Age)) +
+           geom_ribbon(data = swaal2,
+                       mapping = aes(x = year,
+                                     ymin = smoothMeanWeights-(1.96*seSmoothMeanWeights),
+                                     ymax = smoothMeanWeights+(1.96*seSmoothMeanWeights),
+                                     # colour = Age,
+                                     fill = Age),
+                       alpha = 0.15) + 
+           facet_wrap(.~Age)+
+           theme_few()+
+           theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+           scale_x_continuous(breaks = function(x) pretty(x, n = 5)) +
+           # scale_y_continuous(breaks = c(0, 0.2, 0.4, 0.6)) +
+           coord_cartesian(ylim = c(0,0.95)) +
+    scale_color_manual(values = c(ebpal)) +
+    scale_fill_manual(values = c(ebpal))
+)
+```
+
+### Stock Length at Age
+While not used as direct input for the assessment, we do use the lengths at age to estimate time-varying natural mortality.  Therefore, we must perform a similar operation as we do for stock weights at age and maturity ogives, in order to properly raise from the actual sampled fractions up to the remainder of catches in the surveys.
+
+```{r lengthsAtAge}
+#===
+# Get numbers of length samples
+#====
+# Make tables
+len_nr_F<-wgt_nr_F
+len_nr_F[,3:ncol(len_nr_F)]<-NA
+len_nr_M<-len_nr_F
+
+# Females
+for (i in 1:nrow(len_nr_F)){
+  for (j in 3:(ncol(len_nr_F)-1)){
+    
+    if(nr_fish_sea_F[i,j]>0){
+      len_nr_F[i,j]<-nr_fish_sea_F[i,j]*nr_fish_sea_F[i,names(nr_fish_sea_F)==as.character("LngtClass")]
+    }else{
+      len_nr_F[i,j]<-0
+    }
+  }
+}                          
+
+# Males
+for (i in 1:nrow(len_nr_M)){
+  for (j in 3:(ncol(len_nr_M)-1)){
+    
+    if(nr_fish_sea_M[i,j]>0){
+      len_nr_M[i,j]<-nr_fish_sea_M[i,j]*nr_fish_sea_M[i,names(nr_fish_sea_M)==as.character("LngtClass")]
+    }else{
+      len_nr_M[i,j]<-0
+    }
+  }
+}          
+
+#===
+# Sum of these values over lenghtclasses, by age
+#====
+# Make Tables
+sum_len_nr_F<-sum_wgt_nr_F
+sum_len_nr_F[,-1]<-NA
+sum_len_nr_M<-sum_len_nr_F
+
+# Females
+for (i in 1:nrow(sum_len_nr_F)){ 
+  for (j in 2:ncol(sum_len_nr_F)){ 
+    year_i<-sum_len_nr_F[i,names(sum_len_nr_F)==as.character("year")]
+    sum_len_nr_F[i,j]<-sum(len_nr_F[which(len_nr_F$year==year_i),names(len_nr_F)==names(sum_len_nr_F)[j]]) 
+  }
+}
+
+# Males
+for (i in 1:nrow(sum_len_nr_M)){ 
+  for (j in 2:ncol(sum_len_nr_M)){ 
+    year_i<-sum_len_nr_M[i,names(sum_len_nr_M)==as.character("year")]
+    sum_len_nr_M[i,j]<-sum(len_nr_M[which(len_nr_M$year==year_i),names(len_nr_M)==names(sum_len_nr_M)[j]]) 
+  }
+}
+#=====
+
+#===
+# Calculate mean length at age  
+#====
+# Make tables
+LAA_F<-WAA_F
+LAA_F[,-1]<-NA
+LAA_M<-LAA_F
+LAA_combsex<-LAA_M
+
+# Females
+for (i in 1:nrow(LAA_F)){
+  for (j in 2:ncol(LAA_F)){
+    LAA_F[i,j]<-sum_len_nr_F[i,j]/sum_nr_fish_sea_F[i,j]
+  }
+}
+
+# Males
+for (i in 1:nrow(LAA_M)){
+  for (j in 2:ncol(LAA_M)){
+    LAA_M[i,j]<-sum_len_nr_M[i,j]/sum_nr_fish_sea_M[i,j]
+  }
+}
+
+# comb of F and M
+for (i in 1:nrow(LAA_combsex)){ 
+  for (j in 2:ncol(LAA_combsex)){ 
+    if(!is.na(LAA_F[i,j])&!is.na(LAA_M[i,j])){
+      LAA_combsex[i,j]<-(LAA_F[i,j]*sex_ratio_F[i,j])+(LAA_M[i,j]*(1-sex_ratio_F[i,j]))
+    }
+    if(is.na(LAA_F[i,j])&!is.na(LAA_M[i,j])){
+      LAA_combsex[i,j]<-LAA_M[i,j]
+    }
+    if(is.na(LAA_M[i,j])&!is.na(LAA_F[i,j])){
+      LAA_combsex[i,j]<-LAA_F[i,j]    
+    }
+  }
+}
+
+#===
+# Clean Data Environment
+#====
+k <- append(k, c("LAA_combsex", "LAA_F", "LAA_M", "WAA_combsex", "WAA_F", "WAA_M", "swaal", "m19WAA", "rm19WAA"))
+rm(list = ls()[!ls() %in% k])
+#=====
+
+```
+#### Stock Lengths at age
+```{r fig.cap= paste0("Stock lengths at age by year, over time."), fig.height=10}
+slalba <- melt(setDT(LAA_combsex), id.vars = "year", variable.name = "Age", value.name = "MeanLength")
+
+
+plt_lay <- ggplot() +
+  geom_line(data = slalba,
+            mapping = aes(x = year,
+                          y = MeanLength,
+                          colour = Age)) +
+  facet_wrap(.~Age)+
+  theme_few()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+  scale_x_continuous(breaks = function(x) pretty(x, n = 5)) +
+    scale_color_manual(values = ebpal)
+
+style(ggplotly(plt_lay), showlegend = FALSE)
+```
+
+#### Raw lengths at age observations
+```{r fig.cap="Raw lengths at age from survey"}
+ca_hh_fin_bits_ibts$AgeN <- ca_hh_fin_bits_ibts$Age
+ca_hh_fin_bits_ibts$AgeF <- factor(as.character(ca_hh_fin_bits_ibts$AgeN), levels = as.character(c(1:max(ca_hh_fin_bits_ibts$AgeN, na.rm = T))))
+
+plt_rla <- ggplot() +
+  geom_point(data = ca_hh_fin_bits_ibts[!is.na(ca_hh_fin_bits_ibts$AgeF) & ca_hh_fin_bits_ibts$LngtClass < 110 & ca_hh_fin_bits_ibts$Quarter == 1 & ca_hh_fin_bits_ibts$AgeN < 26, ],
+            mapping = aes(x = AgeF,
+                          y = LngtClass)) +
+  theme_few()+
+  scale_color_manual(values = c(ebpal)) +
+  scale_fill_manual(values = c(ebpal)) +
+  guides(colour = "none", fill = "none")
+
+ggplotly(plt_rla)
+
+```
+
+```{r fig.cap="Lengths at age, over time."}
+plt_rlat <- ggplot() +
+  geom_point(data = ca_hh_fin_bits_ibts[!is.na(ca_hh_fin_bits_ibts$Age) & ca_hh_fin_bits_ibts$LngtClass < 110 & ca_hh_fin_bits_ibts$Quarter == 1, ],
+            mapping = aes(x = Year,
+                          y = LngtClass)) +
+    facet_wrap(facets = "AgeF") +
+  theme_few()+
+  scale_x_continuous(breaks = function(x) pretty(x, n = 5)) +
+  scale_color_manual(values = c(ebpal)) +
+  scale_fill_manual(values = c(ebpal)) +
+  guides(colour = "none", fill = "none")
+
+ggplotly(plt_rlat)
+``` 
+
+### Natural Mortality Estimates
+To improve upon the _magic numbers_ that were previously the basis of the assumed natural mortality across ages, we can use the Gislason (et al. 2010) method for estimating natural mortality based on length, $L_{\infty}$, and $K$.
+$$
+ln(M) = 0.55 - 1.61ln(L) + 1.44ln(L_{\infty}) + ln(K)
+$$
+Where M is natural mortality, $L$ is length at a given age (and/or age*year), $L_{\infty}$ is the asymptotal length of the stock, and $K$ is the shape parameter of the Von Bertalanffy growth curve. 
+
+To estimate $L_{\infty}$ and $K$, we can fit a linear model to the 1-year staggered lengths (Ford-Walford method) and derive these values from the slope and intercept parameters.
+
+```{r VBGF, eval=FALSE, fig.cap="One year staggered length at age in the stock (i.e. a2 has length at age1 on x axis and length at age 2 from the subsequent year on y axis)"}
+## Create staggered length at age data
+LAA_long <- reshape(data = LAA_combsex,
+                  varying = colnames(LAA_combsex)[-1],
+                  v.names = "MeanLength",
+                  timevar = "Age",
+                  times = colnames(LAA_combsex)[-1],
+                  idvar = "year",
+                  direction = "long") 
+LAA_long$AgeN <- as.numeric(gsub(pattern = "a", replacement = "", x = LAA_long$Age))
+
+tempshift <- LAA_long
+tempshift$AgeN <- tempshift$AgeN +1
+tempshift$year <- tempshift$year +1
+names(tempshift)[3] <- "FirstMeanLength"
+
+temp_df <- merge(LAA_long, tempshift, by = c("AgeN", "year"), all.x = TRUE)
+
+m1 <- lm(MeanLength ~ FirstMeanLength, data = temp_df[!is.na(temp_df$MeanLength) & !is.na(temp_df$FirstMeanLength), ])
+
+plt_fw <- ggplot(temp_df[!is.na(temp_df$MeanLength) & !is.na(temp_df$FirstMeanLength), ]) +
+  geom_point(mapping = aes(x = FirstMeanLength,
+                           y = MeanLength,
+                           colour = Age.x)) +
+  geom_smooth(mapping = aes(x = FirstMeanLength,
+                           y = MeanLength),
+              method = "lm") +
+  scale_colour_manual(values = ebpal) +
+  theme_few()
+
+ggplotly(plt_fw)
+```
+
+From this linear model we can calculate that $L_{\infty} =$ `r unname(m1$coefficients[1]/(1-m1$coefficients[2]))`, and $K =$ `r unname(-log(m1$coefficients[2]))`. Now we can calculate the natural mortality estimates for each age across time.
+
+Alternately, we can estimate $L_{\infty}$ and $K$ from raw survey data using maximum likelihood estimation. we can look at the length at age plots to propose some good starting points for this estimation.
+
+```{r estLinfandKfromRawData_Sven, eval=FALSE}
+## Initialising values for linf, k and t0
+theta <- c(unname(m1$coefficients[1]/(1-m1$coefficients[2])),
+           unname(-log(m1$coefficients[2])), 
+           0)
+
+## Explicit ages and lengths to be used in optimisation
+tempdf <- ca_hh_fin_bits_ibts[!is.na(ca_hh_fin_bits_ibts$Age) & ca_hh_fin_bits_ibts$LngtClass < 110 & ca_hh_fin_bits_ibts$Quarter == 1 & ca_hh_fin_bits_ibts$AgeN < 26, ]
+
+age <- tempdf[, "AgeN"]
+lt <- tempdf[, "LngtClass"]
+
+## Optimisation function
+SSQ <- function(theta, x) {
+  Linf <- theta[1]
+  K <- theta[2]
+  t0 <- theta[3]
+  epsilon <- rep(0, length(age))
+  lpred <- rep(0, length(age))
+  for (i in 1:length(age)) {
+    lpred[i] <- Linf * (1 - exp(-K * (age[i] - t0)))
+    epsilon[i] <- (lt[i] - lpred[i])^2
+  }
+  ssq <- sum(epsilon)
+  return(ssq)
+}
+out <- optim(theta, fn = SSQ, method = "BFGS", x = age, hessian = TRUE)
+out$V <- solve(out$hessian)  #solve the hessian
+out$S <- sqrt(diag(out$V))  #Standard Error
+out$R <- out$V/(out$S %o% out$S)  #Correlation
+```
+
+```{r estimateLinfandK_logNormErr, eval=FALSE}
+L_inf <- unname(m1$coefficients[1]/(1-m1$coefficients[2]))
+K <- unname(-log(m1$coefficients[2]))
+t0 <- 0
+sd <- 1
+
+vbg <- bbmle::mle2(log(LngtClass) ~ #response variable
+		dnorm(mean = log(L_inf)+log(1-exp(-K*(AgeN-t0))), sd=sd), 
+		data=tempdf, #data frame
+		start=list(L_inf=L_inf , K=K, t0=t0, sd=sd))
+
+coef <- data.frame(coeff = names(vbg@fullcoef),
+                   mech = c(L_inf, K, t0, sd),
+                   est = as.numeric(vbg@fullcoef))
+
+
+```
+
+Now by utilising the raw input data we arrive at similar values for L and k as we acheived with the Ford-Walford method.
+
+```{r fig.cap="Plot estimated growth parameters over lengths at age."}
+tempdf$est_sv <- out$par[1]*(1 - exp(-out$par[2] * (tempdf$AgeN - out$par[3])))
+tdf <- data.frame(AgeN=seq(from = 0, to=max(tempdf$AgeN), by = 0.1))
+tdf$est_sv <- out$par[1]*(1 - exp(-out$par[2] * (tdf$AgeN - out$par[3])))
+
+ggplot() +
+  geom_point(data = tempdf,
+             mapping = aes(x = AgeF,
+                           y = LngtClass)) +
+  geom_line(data = tdf, mapping = aes(x = AgeN,
+                                      y = est_sv),
+            colour = ebpal[1],
+            size = 2) +
+  theme_few()+
+  scale_color_manual(values = c(ebpal)) +
+  scale_fill_manual(values = c(ebpal)) +
+  guides(colour = "none", fill = "none")
+```
+
+After all of this, these life history parameters do not look acceptable for this species.  Therefore we take values from [fishbase.se](https://fishbase.se/popdyn/PopGrowthList.php?ID=1342&GenusName=Pleuronectes&SpeciesName=platessa&fc=440), such that: $L_{\infty} =$ 52cm and $K =$ 0.168 ($t0 =$ -0.72, in this case).
+```{r aselectParams}
+## Select life history parameters
+Linf <- 52 #Fishbase for Baltic
+K <- 0.168 #Fishbase for Baltic
+t0 <- -0.72 #Fishbase for Baltic
+```
+
+```{r fig.cap="Plot of Selected VBGF."}
+tdf <- data.frame(AgeN=seq(from = 0, to=max(tempdf$AgeN), by = 0.1))
+tdf$vbgf <- Linf*(1 - exp(-K * (tdf$AgeN - t0)))
+ggplot() +
+  geom_line(data = tdf, mapping = aes(x = AgeN,
+                                      y = vbgf),
+            colour = ebpal[1],
+            size = 2) +
+  theme_few()+
+  scale_color_manual(values = c(ebpal)) +
+  scale_fill_manual(values = c(ebpal)) +
+  guides(colour = "none", fill = "none")
+```
+
+```{r nmCalcs}
+## Calculate annually varying natural mortality
+LAA_long$nm <- exp(0.55 - 1.61*log(LAA_long$MeanLength) + 1.44*log(Linf) + log(K))
+nm_var <- LAA_long[!is.na(LAA_long$nm), ]
+
+## Aggregate to time invariant natural mortality 
+nm_fix <- aggregate(nm ~ AgeN, data = nm_var, FUN = "mean")
+
+nm_stdr <- aggregate(nm ~ AgeN,
+                     data = nm_var,
+                     FUN = function(x){sd(x, na.rm = TRUE)/sqrt(length(na.omit(x)))})
+
+names(nm_stdr)[2] <- "StdErr"
+nm_stdr <- merge(nm_stdr, nm_fix, by="AgeN", all.y = T)
+nm_stdr$ymax <- nm_stdr$nm + 1.96*nm_stdr$StdErr
+nm_stdr$ymin <- nm_stdr$nm - 1.96*nm_stdr$StdErr
+
+nm_var$Year <- as.factor(as.character(nm_var$year))
+nm_var$Age <- factor(as.character(nm_var$AgeN), levels = unique(as.character(nm_var$AgeN)))
+```
+
+```{r fig.cap="Time and age varying natural mortality based on Gislason. Time faceted by age."}
+plt_nmvar_age <- ggplot(nm_var) +
+  geom_line(mapping = aes(x = year,
+                          y = nm,
+                          group = Age,
+                          colour = Age)) +
+  facet_wrap(facets = "Age", scales = "free_y") +
+  scale_color_manual(values = ebpal) +
+  theme_few() +
+  theme(axis.text.x = element_text(angle = 45))
+
+ggplotly(plt_nmvar_age)
+```
+
+```{r fig.cap="Time and age varying natural mortality based on Gislason. Ages faceted by time."}
+plt_nmvar_year <- ggplot(nm_var) +
+  geom_line(mapping = aes(x = AgeN,
+                          y = nm)) +
+  facet_wrap(facets = "Year") +
+  theme_few()
+
+ggplotly(plt_nmvar_year)
+```
+
+```{r nmtimevarGislason}
+nm_sam <- as.data.frame(nm_var[, c("AgeN", "year", "nm")])
+nm_sam <- reshape(nm_sam,
+                 v.names = "nm",
+                 timevar = "AgeN",
+                 idvar = "year",
+                 direction = "wide")
+
+
+#Raw annual estimates
+nm_SAM <- nm_sam
+# for(i in 1:ncol(nm_SAM)){
+#   for(j in 1:nrow(nm_SAM)){
+#     nm_SAM[j, i] <- ifelse(is.na(nm_SAM[j, i]), -9, nm_SAM[j, i])
+#   }
+# }
+
+#### Make early "NA" Values plausible
+for(i in 1:ncol(nm_SAM)){
+  for(j in 1:nrow(nm_SAM)){
+    nm_SAM[j, i] <- ifelse(is.na(nm_SAM[j, i]), median(c(nm_SAM[,i]), na.rm = T), nm_SAM[j, i])
+  }
+}
+
+save_as_lowestoft(df = nm_SAM[nm_SAM$year %in% c(2002:(DataYear+1)), colnames(nm_SAM)[-1]],
+                  file_path = "Assessment Input/StockAnnex/nm.dat",
+                  title = "Natural mortality estimates from Gislason method (parameterised from FishBase), annual estimations by age and year.",
+                  rando_numbers = paste(c(1, 4), collapse = "\t"),
+                  year_range = paste(c(2002, (DataYear+1)), collapse = "\t"),
+                  age_range = paste(c(1, 10), collapse = "\t"),
+                  timeseries_type = 1)
+
+## Calculate 3y sliding window average for whole timeseries ----
+### Calculate the mean ----
+ada <- an(3, nrow(nm_sam))
+nmG3sw <- frollmean(x = nm_sam[, -1], n = ada, na.rm = T, align = "right", adaptive = TRUE)
+nmG3sw <- as.data.frame(do.call(cbind, nmG3sw))
+#### Retain only the correct years
+nmG3sw$year <- nm_sam$year
+nmG3sw <- nmG3sw[nmG3sw$year %in% c(2002:(DataYear+1)), ]
+
+
+
+#### Wide to long format
+nmG3swL <- reshape(nmG3sw,
+                  varying = colnames(nmG3sw)[-11],
+                  v.names = "nm",
+                  timevar = "Age",
+                  times = colnames(nmG3sw)[-11],
+                  idvar = "year",
+                  direction = "long")
+nmG3swL$Age <- as.numeric(gsub(pattern = "V", replacement = "", x = nmG3swL$Age))
+
+### Calcualte the standard error ----
+nmG3stdr <- frollapply(nm_sam[, -1],
+                      3,
+                      FUN = function(x){sd(x, na.rm = TRUE)/sqrt(length(na.omit(x)))})
+nmG3stdr <- as.data.frame(do.call(cbind, nmG3stdr))
+nmG3stdr$year <- nm_sam$year
+
+#### Retain only the correct years
+nmG3stdr <- nmG3stdr[nmG3stdr$year %in% c(2002:(DataYear+1)),]
+
+#### Wide to long format
+nmG3stdrL <- reshape(nmG3stdr,
+                    varying = colnames(nmG3stdr)[-11],
+                    v.names = "StdErrnm",
+                    timevar = "Age",
+                    times = colnames(nmG3stdr)[-11],
+                    idvar = "year",
+                    direction = "long")
+nmG3stdrL$Age <- as.numeric(gsub(pattern = "V", replacement = "", x = nmG3stdrL$Age))
+
+### Calculate 93% confidence intervals ----
+nmG3swL <- merge(x = nmG3swL, y = nmG3stdrL, by = c("year", "Age"), all.x = TRUE)
+nmG3swL$ymax <- nmG3swL$nm + (1.96*nmG3swL$StdErrnm)
+nmG3swL$ymin <- nmG3swL$nm - (1.96*nmG3swL$StdErrnm)
+nmG3swL$AgeN <- nmG3swL$Age
+nmG3swL$Age <- as.character(nmG3swL$Age)
+nmG3swL <- nmG3swL[nmG3swL$year %in% c(2002:(DataYear+1)),]
+
+nm_SAM <- nmG3sw
+# for(i in 1:ncol(nm_SAM)){
+#   for(j in 1:nrow(nm_SAM)){
+#     nm_SAM[j, i] <- ifelse(is.na(nm_SAM[j, i]), -9, nm_SAM[j, i])
+#   }
+# }
+
+#### Make early "NA" Values plausible
+for(i in 1:ncol(nm_SAM)){
+  for(j in 1:nrow(nm_SAM)){
+    nm_SAM[j, i] <- ifelse(is.na(nm_SAM[j, i]), median(c(nm_SAM[,i]), na.rm = T), nm_SAM[j, i])
+  }
+}
+
+save_as_lowestoft(df = nm_SAM[nm_SAM$year %in% c(2002:(DataYear+1)), colnames(nm_SAM)[-11]],
+                  file_path = "Assessment Input/AlternateModel_3ysw/nm.dat",
+                  title = "Natural mortality estimates from Gislason method (parameterised from FishBase), three year sliding window means, by age and year.",
+                  rando_numbers = paste(c(1, 4), collapse = "\t"),
+                  year_range = paste(c(2002, (DataYear+1)), collapse = "\t"),
+                  age_range = paste(c(1, 10), collapse = "\t"),
+                  timeseries_type = 1)
+
+
+
+## Calculate 5y sliding window average for whole timeseries ----
+### Calculate the mean ----
+ada <- an(5, nrow(nm_sam))
+nmG5sw <- frollmean(x = nm_sam[, -1], n = ada, na.rm = T, align = "right", adaptive = TRUE)
+nmG5sw <- as.data.frame(do.call(cbind, nmG5sw))
+#### Make the first year equal to the first calculable 5y average
+nmG5sw$year <- nm_sam$year
+# mo5sw[mo5sw$year == 2002, -ncol(mo5sw)] <- mo5sw[mo5sw$year == 2003, -ncol(mo5sw)]
+nmG5sw <- nmG5sw[nmG5sw$year %in% c(2002:(DataYear+1)),]
+
+
+#### Wide to long format
+nmG5swL <- reshape(nmG5sw,
+                  varying = colnames(nmG5sw)[-11],
+                  v.names = "nm",
+                  timevar = "Age",
+                  times = colnames(nmG5sw)[-11],
+                  idvar = "year",
+                  direction = "long")
+nmG5swL$Age <- as.numeric(gsub(pattern = "V", replacement = "", x = nmG5swL$Age))
+
+### Calcualte the standard error ----
+nmG5stdr <- frollapply(nm_sam[, -1],
+                      5,
+                      FUN = function(x){sd(x, na.rm = TRUE)/sqrt(length(na.omit(x)))})
+nmG5stdr <- as.data.frame(do.call(cbind, nmG5stdr))
+nmG5stdr$year <- nm_sam$year
+
+#### Make the first year equal to the first calculable 5y average
+nmG5stdr[nmG5stdr$year == 2002, -ncol(nmG5stdr)] <- nmG5stdr[nmG5stdr$year == 2003, -ncol(nmG5stdr)]
+nmG5stdr <- nmG5stdr[nmG5stdr$year %in% c(2002:(DataYear+1)),]
+
+#### Wide to long format
+nmG5stdrL <- reshape(nmG5stdr,
+                    varying = colnames(nmG5stdr)[-11],
+                    v.names = "StdErrnm",
+                    timevar = "Age",
+                    times = colnames(nmG5stdr)[-11],
+                    idvar = "year",
+                    direction = "long")
+nmG5stdrL$Age <- as.numeric(gsub(pattern = "V", replacement = "", x = nmG5stdrL$Age))
+
+### Calculate 95% confidence intervals ----
+nmG5swL <- merge(x = nmG5swL, y = nmG5stdrL, by = c("year", "Age"), all.x = TRUE)
+nmG5swL$ymax <- nmG5swL$nm + (1.96*nmG5swL$StdErrnm)
+nmG5swL$ymin <- nmG5swL$nm - (1.96*nmG5swL$StdErrnm)
+nmG5swL$AgeN <- nmG5swL$Age
+nmG5swL$Age <- as.character(nmG5swL$Age)
+nmG5swL <- nmG5swL[nmG5swL$year %in% c(2002:(DataYear+1)),]
+
+nm_SAM <- nmG5sw
+# for(i in 1:ncol(nm_SAM)){
+#   for(j in 1:nrow(nm_SAM)){
+#     nm_SAM[j, i] <- ifelse(is.na(nm_SAM[j, i]), -9, nm_SAM[j, i])
+#   }
+# }
+
+#### Make early "NA" Values plausible
+for(i in 1:ncol(nm_SAM)){
+  for(j in 1:nrow(nm_SAM)){
+    nm_SAM[j, i] <- ifelse(is.na(nm_SAM[j, i]), median(c(nm_SAM[,i]), na.rm = T), nm_SAM[j, i])
+  }
+}
+
+save_as_lowestoft(df = nm_SAM[nm_SAM$year %in% c(2002:(DataYear+1)), colnames(nm_SAM)[-11]],
+                  file_path = "Assessment Input/AlternateModel_5ysw/nm.dat",
+                  title = "Natural mortality estimates from Gislason method (parameterised from FishBase), five year sliding window means, by age and year.",
+                  rando_numbers = paste(c(1, 4), collapse = "\t"),
+                  year_range = paste(c(2002, (DataYear+1)), collapse = "\t"),
+                  age_range = paste(c(1, 10), collapse = "\t"),
+                  timeseries_type = 1)
+
+```
+
+
+```{r fig.cap="Age varying natural mortality based on Gislason (mean values from above time series +/- 95% confidence intervals."}
+plt_nmfix <- ggplot(nm_stdr) +
+  geom_line(mapping = aes(x = AgeN,
+                          y = nm)) +
+  geom_ribbon(mapping = aes(x = AgeN,
+                            ymax = ymax,
+                            ymin = ymin),
+              alpha = 0.3) +
+  theme_few()
+
+ggplotly(plt_nmfix)
+```
+
+```{r tableTimeInvariantMortality}
+### save_as_lowestoft Five Year Sliding Window
+nm_SAM <- nm_stdr
+nm_SAM$year <- rep("all", nrow(nm_SAM))
+nm_SAM <- reshape(nm_SAM[, c("AgeN", "nm", "year")],
+                 # varying = as.factor(as.character(nm_stdr$AgeN)),
+                 v.names = "nm",
+                 timevar = "AgeN",
+                 idvar = "year",
+                 direction = "wide")
+
+# for(i in 1:ncol(nm_SAM)){
+#   for(j in 1:nrow(nm_SAM)){
+#     nm_SAM[j, i] <- ifelse(is.na(nm_SAM[j, i]), -9, nm_SAM[j, i])
+#   }
+# }
+
+#### Make early "NA" Values plausible
+for(i in 1:ncol(nm_SAM)){
+  for(j in 1:nrow(nm_SAM)){
+    nm_SAM[j, i] <- ifelse(is.na(nm_SAM[j, i]), median(c(nm_SAM[,i]), na.rm = T), nm_SAM[j, i])
+  }
+}
+
+save_as_lowestoft(df = nm_SAM[, colnames(nm_SAM)[-1]],
+                  file_path = "Assessment Input/AlternateModel_TimeInvariant/nm.dat",
+                  title = "Natural mortality estimates from Gislason method (parameterised from FishBase), timeseries means by age for time-invariant profile.",
+                  rando_numbers = paste(c(1, 4), collapse = "\t"),
+                  year_range = paste(c(2002, (DataYear+1)), collapse = "\t"),
+                  age_range = paste(c(1, 10), collapse = "\t"),
+                  timeseries_type = 2)
+
+#Table for HTML
+# kable(nm_stdr,
+#       caption = "Mean mortalities by age for time invariant natural mortality in SAM.")
+```
+
+Based on scaling these time-invariant natural mortalities up an down, an optimised likelihood profile found that scaling all ages by a factor of 1.2 produced the best model fit. To see the details of this please see the working report, or script in the appendix.
+
+```{r tableScaledTimeInvariantMortality}
+### save_as_lowestoft Five Year Sliding Window
+nm_scaled <- nm_stdr
+nm_scaled$year <- rep("all", nrow(nm_scaled))
+nm_scaled$nm <- nm_scaled$nm*1.2
+nm_scaled <- reshape(nm_scaled[, c("AgeN", "nm", "year")],
+                 # varying = as.factor(as.character(nm_stdr$AgeN)),
+                 v.names = "nm",
+                 timevar = "AgeN",
+                 idvar = "year",
+                 direction = "wide")
+
+# for(i in 1:ncol(nm_scaled)){
+#   for(j in 1:nrow(nm_scaled)){
+#     nm_scaled[j, i] <- ifelse(is.na(nm_scaled[j, i]), -9, nm_scaled[j, i])
+#   }
+# }
+
+#### Make early "NA" Values plausible
+for(i in 1:ncol(nm_scaled)){
+  for(j in 1:nrow(nm_scaled)){
+    nm_scaled[j, i] <- ifelse(is.na(nm_scaled[j, i]), median(c(nm_scaled[,i]), nm_scaled = T), nm_scaled[j, i])
+  }
+}
+
+save_as_lowestoft(df = nm_scaled[, colnames(nm_scaled)[-1]],
+                  file_path = "Assessment Input/AlternateModel_TimeInvariant/nm_scaled.dat",
+                  title = "Time invariant natural mortality estimates from Gislason method (parameterised from FishBase), scaled according to optimised likelihood profile runs.",
+                  rando_numbers = paste(c(1, 4), collapse = "\t"),
+                  year_range = paste(c(2002, (DataYear+1)), collapse = "\t"),
+                  age_range = paste(c(1, 10), collapse = "\t"),
+                  timeseries_type = 2)
+
+#Table for HTML
+# kable(nm_stdr,
+#       caption = "Time invariant natural mortality estimates from Gislason method scaled according to optimised likelihood profile runs.")
+```
+
+### Catch weight at age (CWAA)
+This section is currently a work in progress - need to figure out the appropriate method to raise intercatch data according to the allocations, manually, to be able to automatically update the section each year (instead of copy-pasting intercatch ouput for multiple tables every year).
+```{r CWAA table, eval=FALSE}
+cw_df <- cw
+
+```
+
+
+## Cohort Tracking
+We can track the progression of different cohorts through time from both commercial and survey data.
+
+Let's start with catches.
+```{r fig.cap= "Bubble plot showing numbers (size of bubble) at age (y-axis), over time (x-axis) in catches.  The dotted lines show the progression of co-horts where large and small numbers at age can be tracked year to year."}
+#===
+# Data Prep
+#====
+catchNumLng <- reshape(data = catchNum,
+                       varying = list(colnames(catchNum)[2:length((colnames(catchNum)))]),
+                       v.names = c("Number"),
+                       timevar = "Age",
+                       direction = "long")
+# catchNumLng$Age <- as.factor(as.character(catchNumLng$Age))
+# catchNumLng$Age <- factor(catchNumLng$Age, levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"))
+# catchNumLng$Year <- as.factor(as.character(catchNumLng$Year))
+catchNumLng$Year <- as.numeric(as.character(catchNumLng$Year))
+
+catchcohortsLng <- reshape(data = catchcohorts,
+                           varying = list(colnames(catchcohorts)[2:length((colnames(catchcohorts)))]),
+                           v.names = c("Age"),
+                           timevar = "Cohort",
+                           direction = "long")
+# catchcohortsLng$Age <- factor(catchcohortsLng$Age, levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"))
+# catchcohortsLng$Age <- as.factor(as.character(catchcohortsLng$Age), levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"))
+# catchcohortsLng$Year <- as.factor(as.character(catchcohortsLng$Year))
+catchcohortsLng$Year <- as.numeric(as.character(catchcohortsLng$Year))
+#=====
+
+#===
+# Figure Cohorts over time from catches
+#====
+plt_catchCohorts <- ggplot() +
+  geom_line(data = catchcohortsLng,
+            mapping = aes(x = Year,
+                          y = Age,
+                          group = Cohort),
+            linetype = "dotted") +
+  geom_point(data = catchNumLng,
+             mapping = aes(x = Year,
+                           y = Age,
+                           size = Number)) +
+  theme_clean() +
+  coord_cartesian(xlim = c(1999,DataYear)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+ggplotly(plt_catchCohorts)
+#====
+```
+
+```{r fig.cap= "Numbers per age over time.", fig.height=7}
+#===
+# Figure Numbers per age group over time (less intuitive than above cohort plot)
+#====
+plt_catchTime <- ggplot() +
+  geom_line(data = catchNumLng,
+            mapping = aes(x = Year,
+                          y = Number/1000000,
+                          group = Age)) +
+  facet_grid(rows = vars(Age), scales = "free_y")+
+  ylab("Number (millions)") +
+  theme_few() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+ggplotly(plt_catchTime)
+#=====
+```
+
+Now, let's do the same with survey estimations of numbers at age.
+```{r fig.cap= "Bubble plot showing numbers (size of bubble) at age (y-axis), over time (x-axis) estimated from surveys.  The dotted lines show the progression of co-horts where large and small numbers at age can be tracked year to year."}
+#===
+# Data Prep
+#====
+survcohorts <- read.csv(file = "Data/ple.27.21-32_CohortMatrix_1998-WorkingYear.csv", header = T)
+survcohorts$Year <- as.factor(as.character(survcohorts$Year))
+
+survcohortsLng <- reshape(data = survcohorts,
+                      varying = list(colnames(survcohorts)[2:length((colnames(survcohorts)))]),
+                      v.names = c("Age"),
+                      timevar = "Cohort",
+                      direction = "long")
+# survcohortsLng$Age <- as.factor(as.character(survcohortsLng$Age))
+survcohortsLng$Year <- as.factor(as.character(survcohortsLng$Year))
+survcohortsLng <- survcohortsLng[survcohortsLng$Age <= 6, ]
+#=====
+
+#===
+# Plot
+#=====
+plt_survCohorts <- ggplot() +
+  geom_point(data = survTunLng,
+             mapping = aes(x = Year,
+                           y = Age,
+                           size = Index)) +
+  geom_line(data = survcohortsLng,
+            mapping = aes(x = Year,
+                          y = Age,
+                          group = Cohort),
+            linetype = "dotted") +
+  theme_classic() +
+  facet_grid(rows = vars(Survey)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+ggplotly(plt_survCohorts)
+k <- append(k, "survcohortsLng")
+rm(list = ls()[!ls() %in% k])
+#======
+```
