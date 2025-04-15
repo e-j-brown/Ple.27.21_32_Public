@@ -49,15 +49,13 @@ po/*~
 rsconnect/
 
 # Data and Figures not shared via GitHub
-/DataIn/**
-/DataProcessed/**
-/Figures/**
-/Tables/**
-/Assessment\ Input/**
+DataIn/**
+DataProcessed/**
+Figures/**
+Tables/**
+Assessment\ Input/**
 
 # Do not ignore directory structure
-!DataIn/
-
 !DataIn/**/
 !DataProcessed/**/
 !Figures/**/
