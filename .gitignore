@@ -48,6 +48,7 @@ po/*~
 # RStudio Connect folder
 rsconnect/
 
+
 # Data and Figures not shared via GitHub
 DataIn/**
 DataProcessed/**
@@ -56,8 +57,13 @@ Tables/**
 Assessment\ Input/**
 
 # Do not ignore directory structure
+!DataIn/
 !DataIn/**/
+!DataProcessed/
 !DataProcessed/**/
+!Figures/
 !Figures/**/
+!Tables/
 !Tables/**/
+!Assessment\ Input/
 !Assessment\ Input/**/
