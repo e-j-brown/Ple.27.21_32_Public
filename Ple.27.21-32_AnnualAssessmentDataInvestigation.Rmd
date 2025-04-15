@@ -3646,7 +3646,7 @@ K <- unname(-log(m1$coefficients[2]))
 t0 <- 0
 sd <- 1
 
-vbg <- bbmle::mle2(log(LngtClass) ~ #response variable
+vbg <- bbmle::mle2(log(LngtClass) ~ # response variable  ## Currently not working due to extreme data
 		dnorm(mean = log(L_inf)+log(1-exp(-K*(AgeN-t0))), sd=sd), 
 		data=tempdf, #data frame
 		start=list(L_inf=L_inf , K=K, t0=t0, sd=sd))
@@ -3679,7 +3679,7 @@ ggplot() +
   guides(colour = "none", fill = "none")
 ```
 
-After all of this, these life history parameters do not look acceptable for this species.  Therefore we take values from [fishbase.se](https://fishbase.se/popdyn/PopGrowthList.php?ID=1342&GenusName=Pleuronectes&SpeciesName=platessa&fc=440), such that: $L_{\infty} =$ 52cm and $K =$ 0.168 ($t0 =$ -0.72, in this case).
+After all of this, the life history parameters derived from the survey data were not accepted for this species, during the last Benchmark workshop.  Therefore we take values from [fishbase.se](https://fishbase.se/popdyn/PopGrowthList.php?ID=1342&GenusName=Pleuronectes&SpeciesName=platessa&fc=440), such that: $L_{\infty} =$ 52cm and $K =$ 0.168 ($t0 =$ -0.72, in this case).
 ```{r aselectParams}
 ## Select life history parameters
 Linf <- 52 #Fishbase for Baltic
@@ -3722,7 +3722,7 @@ nm_var$Year <- as.factor(as.character(nm_var$year))
 nm_var$Age <- factor(as.character(nm_var$AgeN), levels = unique(as.character(nm_var$AgeN)))
 ```
 
-```{r fig.cap="Time and age varying natural mortality based on Gislason. Time faceted by age."}
+```{r fig.cap="Time and age varying natural mortality based on Gislason. Natural mortality over time, faceted by age."}
 plt_nmvar_age <- ggplot(nm_var) +
   geom_line(mapping = aes(x = year,
                           y = nm,
@@ -3736,7 +3736,7 @@ plt_nmvar_age <- ggplot(nm_var) +
 ggplotly(plt_nmvar_age)
 ```
 
-```{r fig.cap="Time and age varying natural mortality based on Gislason. Ages faceted by time."}
+```{r fig.cap="Time and age varying natural mortality based on Gislason. Natural mortality over ages, faceted by time."}
 plt_nmvar_year <- ggplot(nm_var) +
   geom_line(mapping = aes(x = AgeN,
                           y = nm)) +
@@ -3771,7 +3771,7 @@ for(i in 1:ncol(nm_SAM)){
 }
 
 save_as_lowestoft(df = nm_SAM[nm_SAM$year %in% c(2002:(DataYear+1)), colnames(nm_SAM)[-1]],
-                  file_path = "Assessment Input/StockAnnex/nm.dat",
+                  file_path = "Assessment Input/AlternateModel_AnnualRawBio/nm.dat",
                   title = "Natural mortality estimates from Gislason method (parameterised from FishBase), annual estimations by age and year.",
                   rando_numbers = paste(c(1, 4), collapse = "\t"),
                   year_range = paste(c(2002, (DataYear+1)), collapse = "\t"),
@@ -3916,7 +3916,7 @@ for(i in 1:ncol(nm_SAM)){
 }
 
 save_as_lowestoft(df = nm_SAM[nm_SAM$year %in% c(2002:(DataYear+1)), colnames(nm_SAM)[-11]],
-                  file_path = "Assessment Input/AlternateModel_5ysw/nm.dat",
+                  file_path = "Assessment Input/StockAnnex/nm.dat",
                   title = "Natural mortality estimates from Gislason method (parameterised from FishBase), five year sliding window means, by age and year.",
                   rando_numbers = paste(c(1, 4), collapse = "\t"),
                   year_range = paste(c(2002, (DataYear+1)), collapse = "\t"),
@@ -3926,7 +3926,7 @@ save_as_lowestoft(df = nm_SAM[nm_SAM$year %in% c(2002:(DataYear+1)), colnames(nm
 ```
 
 
-```{r fig.cap="Age varying natural mortality based on Gislason (mean values from above time series +/- 95% confidence intervals."}
+```{r fig.cap="Age varying, time-invariant natural mortality based on Gislason (mean values from above time series +/- 95% confidence intervals."}
 plt_nmfix <- ggplot(nm_stdr) +
   geom_line(mapping = aes(x = AgeN,
                           y = nm)) +
