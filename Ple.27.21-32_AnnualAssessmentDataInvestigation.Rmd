@@ -45,12 +45,24 @@ ebpal <- c("#800080", "#006400", "#D55E00", "#0072B2", "#F0E442", "#009E73", "#E
 This script generates a working document describing the data available for an assessment of ple.27.3a.21-32; Plaice in the Kattegat, The Belt Seas and the Baltic Sea.  The report generated covers the following topics:
 
 - Assessment Input Data
-  - Catches and Landings
+  - Catches broken down by:
+      - subdivision
+      - country
+      - catch component
+      - management area
+  - Sampling coverage of commercial data
   - Survey Indices
-  - Biological Data
-  - Reference Points
-- Background Data and _ad-hoc_ Requests are dealt with in the relevant sections.
-  
+  - Stock Biological Data:
+      - Maturity Ogives
+      - Stock weights at age
+      - Stock lengths at age
+      - Natural mortality estimates
+  - Cohort tracking in:
+      - Catches
+      - Surveys
+
+This document covers many aspects of the data in more detail and from different angles, than are strictly necessary for the assessment, but in doing so we get a better grasp of what dynamics are at play in the fishery and the stock.
+
 Most of the code used to process data and create visualisations are hidden in this HTML.  To view each chunk, simply click on the button to the right of the relevant section.  To download the entire R-markdown (.rmd) file including all text and code chunks, use the _code_ button at the top of the page, with the dropdown arrow.
 
 The script that generates this document is one in a series which contribute to the production of advice for this plaice stock. To download the entire series, and associated directory structure, the project is available at GitHub: https://github.com/e-j-brown/Ple.27.21_32_Public.
@@ -63,17 +75,11 @@ require(mgcv)
 require(data.table)
 require(reshape2)
 require(knitr)
-# require(scales)
 require(bookdown)
 require(ggplot2)
 require(ggthemes)
-# require(stringr)
-# require(lattice)
-# require(plyr)
 require(plotly)
 require(icesAdvice)
-# require("stockassessment") # available from https://github.com/fishfollower/SAM
-# require(parallel)
 require(sf)
 
 myprop <- function(df, nomo = "nomo", NoAtLngt = "CANoAtLngt"){
@@ -218,37 +224,9 @@ rm(list = c("HistLand_raw", "landings"))
 k <- append(k, c("HistLand"))
 ```
 
-Catch cohort matrices are set up according to the annually updated intercatch output (hidden chunk).
-*This section needs to be updated so that the catch numbers at age are generated automagically with R, to remove the excel step*
-```{r}
-# Define the years and number of cohorts
-year_range <- 1992:DataYear
-num_cohorts <- length(year_range)
-
-# Initialize the dataframe with NA values
-catchcohorts <- data.frame(Year = year_range, matrix(NA, nrow = num_cohorts, ncol = num_cohorts))
-colnames(catchcohorts)[2:(num_cohorts + 1)] <- paste0("Cohort", 1:num_cohorts)
-
-# Fill the dataframe with cohort values
-for (cohort in 1:num_cohorts) {
-  for (age in 1:10) {
-    year_index <- age + cohort - 1
-    if (year_index <= num_cohorts) {
-      catchcohorts[year_index, cohort + 1] <- age
-    }
-  }
-}
-catchcohorts$Year <- as.factor(as.character(catchcohorts$Year))
-
-
-catchNum <- read.csv(file = "DataIn/CatchData/ple.27.21-32_CatchNumAge_2002_DataYear.csv", header = T) 
-catchNum$Year <- as.factor(as.character(catchNum$Year))
-k <- append(k, c("catchcohorts", "catchNum"))
-```
-  
-
 ### Landings - Results 
-  In more recent history, observers and other sampling programmes have been able to provide estimates of discarded portions of catch.  Below we consider only the landings for the period when catch was divided into landings & discards.
+Over the period for which the assessment model uses catch information (2002:`r DataYear`), observers and other sampling programmes have been able to provide estimates of discarded portions of catch from various elements of the fishery.  First we consider only the landings for this period.
+
 ```{r fig.cap= "Recent history landings by country"}
 #===
 # Figure 3 Short term Landings by country
@@ -273,7 +251,8 @@ ggplotly(plt_land_ctry)
 #====
 ```
 
-We can also interrogate the landings relative to the TACs for the respective management areas that this stock straddles. Namely the North Sea management area in SD21 (Kattegat), and the Baltic Sea management area covering the remainder of the stock; SD22-32.
+We can also visualise the landings relative to the TACs for the respective management areas that this stock straddles. Namely the North Sea management area in SD21 (Kattegat), and the Baltic Sea management area covering the remainder of the stock; SD22-32.
+
 ```{r eval=TRUE, fig.cap= "Recent history landings for the North Sea Management area in subdivision 21"}
 #===
 # Figure 4 Landings and TAC by MgmtArea
@@ -416,7 +395,7 @@ style(ggplotly(plt_land_22_32), showlegend = FALSE)
 #====
 ```
 
-```{r eval=TRUE, fig.cap= "Landings in management areas.  The North Sea comprises just SD21 and has it's own TAC (purple lines), while SDs 22 and above share a TAC across all SDs (22:32)."}
+```{r eval=TRUE, fig.cap= "Landings in management areas.  The North Sea comprises just SD21 and has it's own TAC (purple lines), while the remainder of the Baltic Sea subdivisions (22:32) share a TAC."}
 #===
 # Figure 7 Landings in all areas by country
 #====
@@ -529,7 +508,7 @@ kable(aggregate(CATON ~ Area+Fleet2,
       digits = 2) 
 ```
 
-```{r fig.cap="Commercial catch by catch category for all areas and all countries (tonnes).", fig.height=unit(15,"cm")}
+```{r fig.cap="Commercial catch by catch category for all areas and all countries (tonnes).", fig.height=unit(25,"cm")}
 #===
 # Figure Catch by catch category (all areas, all countries)
 #====
@@ -561,8 +540,12 @@ style(ggplotly(plt_catchcat), showlegend = FALSE)
 ```
 #### Catch Numbers
 We can also investigate stock structure by looking at numbers at age. 
+*This section needs to be updated so that the catch numbers at age are generated automagically with R, to remove the excel step*
 
 ```{r figCanum, fig.cap="Numbers in catch by age, over time"}
+catchNum <- read.csv(file = "DataIn/CatchData/ple.27.21-32_CatchNumAge_2002_DataYear.csv", header = T) 
+catchNum$Year <- as.factor(as.character(catchNum$Year))
+
 catchNumLng <- reshape(data = catchNum,
                        varying = list(colnames(catchNum)[2:length((colnames(catchNum)))]),
                        v.names = c("Number"),
@@ -580,7 +563,7 @@ ggplotly(ggplot(catchNumLng)+
                                    group = Age))+
            theme_few() +
            scale_colour_manual(values = ebpal))
-
+k <- append(k, c("catchNum"))
 ```
 
 #### Discards
@@ -3544,7 +3527,7 @@ ggplotly(plt_rlat)
 ``` 
 
 ### Natural Mortality Estimates
-To improve upon the _magic numbers_ that were previously the basis of the assumed natural mortality across ages, we can use the Gislason (et al. 2010) method for estimating natural mortality based on length, $L_{\infty}$, and $K$.
+Prior assessments of the different components of this stock utilised the _magic numbers_ of temporally fixed natural mortality, with some rough guesses of variation across ages.  Now we use the Gislason (et al. 2010) method for estimating natural mortality based on length, $L_{\infty}$, and $K$.
 $$
 ln(M) = 0.55 - 1.61ln(L) + 1.44ln(L_{\infty}) + ln(K)
 $$
@@ -3704,7 +3687,7 @@ nm_var$Year <- as.factor(as.character(nm_var$year))
 nm_var$Age <- factor(as.character(nm_var$AgeN), levels = unique(as.character(nm_var$AgeN)))
 ```
 
-```{r fig.cap="Time and age varying natural mortality based on Gislason. Natural mortality over time, faceted by age."}
+```{r fig.cap="Time and age varying natural mortality based on Gislason. Natural mortality over time, faceted by age.", fig.height=8}
 plt_nmvar_age <- ggplot(nm_var) +
   geom_line(mapping = aes(x = year,
                           y = nm,
@@ -3718,7 +3701,7 @@ plt_nmvar_age <- ggplot(nm_var) +
 ggplotly(plt_nmvar_age)
 ```
 
-```{r fig.cap="Time and age varying natural mortality based on Gislason. Natural mortality over ages, faceted by time."}
+```{r fig.cap="Time and age varying natural mortality based on Gislason. Natural mortality over ages, faceted by time.", fig.height=10}
 plt_nmvar_year <- ggplot(nm_var) +
   geom_line(mapping = aes(x = AgeN,
                           y = nm)) +
@@ -3727,6 +3710,8 @@ plt_nmvar_year <- ggplot(nm_var) +
 
 ggplotly(plt_nmvar_year)
 ```
+
+To reduce the noise that comes from small samples in annual sampling, we use the same procedure as for maturity ogives and utilise a five-year, sliding window mean of this annually varying estimate, to use as input to our assessment model.
 
 ```{r nmtimevarGislason}
 nm_sam <- as.data.frame(nm_var[, c("AgeN", "year", "nm")])
@@ -3908,7 +3893,7 @@ save_as_lowestoft(df = nm_SAM[nm_SAM$year %in% c(2002:(DataYear+1)), colnames(nm
 ```
 
 
-```{r fig.cap="Age varying, time-invariant natural mortality based on Gislason (mean values from above time series +/- 95% confidence intervals."}
+```{r eval=FALSE, fig.cap="Age varying, time-invariant natural mortality based on Gislason (mean values from above time series +/- 95% confidence intervals."}
 plt_nmfix <- ggplot(nm_stdr) +
   geom_line(mapping = aes(x = AgeN,
                           y = nm)) +
@@ -3958,9 +3943,9 @@ save_as_lowestoft(df = nm_SAM[, colnames(nm_SAM)[-1]],
 #       caption = "Mean mortalities by age for time invariant natural mortality in SAM.")
 ```
 
-Based on scaling these time-invariant natural mortalities up an down, an optimised likelihood profile found that scaling all ages by a factor of 1.2 produced the best model fit. To see the details of this please see the working report, or script in the appendix.
-
 ```{r tableScaledTimeInvariantMortality}
+# Based on scaling these time-invariant natural mortalities up an down, an optimised likelihood profile found that scaling all ages by a factor of 1.2 produced the best model fit. To see the details of this please see the working report, or script in the appendix.
+
 ### save_as_lowestoft Five Year Sliding Window
 nm_scaled <- nm_stdr
 nm_scaled$year <- rep("all", nrow(nm_scaled))
@@ -4009,7 +3994,31 @@ cw_df <- cw
 ## Cohort Tracking
 We can track the progression of different cohorts through time from both commercial and survey data.
 
-Let's start with catches.
+Let's start with catches. First, catch cohort matrices are set up to facilitate the tracking of cohorts through time, in the visualisation (first chunk), then we plot relative numbers by age over time (second chunk).
+
+```{r catchCohortMatrices}
+# Define the years and number of cohorts
+year_range <- 1992:DataYear
+num_cohorts <- length(year_range)
+
+# Initialize the dataframe with NA values
+catchcohorts <- data.frame(Year = year_range, matrix(NA, nrow = num_cohorts, ncol = num_cohorts))
+colnames(catchcohorts)[2:(num_cohorts + 1)] <- paste0("Cohort", 1:num_cohorts)
+
+# Fill the dataframe with cohort values
+for (cohort in 1:num_cohorts) {
+  for (age in 1:10) {
+    year_index <- age + cohort - 1
+    if (year_index <= num_cohorts) {
+      catchcohorts[year_index, cohort + 1] <- age
+    }
+  }
+}
+catchcohorts$Year <- as.factor(as.character(catchcohorts$Year))
+
+k <- append(k, c("catchcohorts"))
+```
+
 ```{r fig.cap= "Bubble plot showing numbers (size of bubble) at age (y-axis), over time (x-axis) in catches.  The dotted lines show the progression of co-horts where large and small numbers at age can be tracked year to year."}
 #===
 # Data Prep
@@ -4019,9 +4028,6 @@ catchNumLng <- reshape(data = catchNum,
                        v.names = c("Number"),
                        timevar = "Age",
                        direction = "long")
-# catchNumLng$Age <- as.factor(as.character(catchNumLng$Age))
-# catchNumLng$Age <- factor(catchNumLng$Age, levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"))
-# catchNumLng$Year <- as.factor(as.character(catchNumLng$Year))
 catchNumLng$Year <- as.numeric(as.character(catchNumLng$Year))
 
 catchcohortsLng <- reshape(data = catchcohorts,
@@ -4029,9 +4035,6 @@ catchcohortsLng <- reshape(data = catchcohorts,
                            v.names = c("Age"),
                            timevar = "Cohort",
                            direction = "long")
-# catchcohortsLng$Age <- factor(catchcohortsLng$Age, levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"))
-# catchcohortsLng$Age <- as.factor(as.character(catchcohortsLng$Age), levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"))
-# catchcohortsLng$Year <- as.factor(as.character(catchcohortsLng$Year))
 catchcohortsLng$Year <- as.numeric(as.character(catchcohortsLng$Year))
 #=====
 
@@ -4075,24 +4078,40 @@ ggplotly(plt_catchTime)
 ```
 
 Now, let's do the same with survey estimations of numbers at age.
+
+```{r survCohortMatrices}
+# Define the years and number of cohorts
+year_range <- 1992:(DataYear+1)
+num_cohorts <- length(year_range)
+
+# Initialize the dataframe with NA values
+survcohorts <- data.frame(Year = year_range, matrix(NA, nrow = num_cohorts, ncol = num_cohorts))
+colnames(survcohorts)[2:(num_cohorts + 1)] <- paste0("Cohort", 1:num_cohorts)
+
+# Fill the dataframe with cohort values
+for (cohort in 1:num_cohorts) {
+  for (age in 1:10) {
+    year_index <- age + cohort - 1
+    if (year_index <= num_cohorts) {
+      survcohorts[year_index, cohort + 1] <- age
+    }
+  }
+}
+survcohorts$Year <- as.factor(as.character(survcohorts$Year))
+
+k <- append(k, c("survcohorts"))
+```
+
 ```{r fig.cap= "Bubble plot showing numbers (size of bubble) at age (y-axis), over time (x-axis) estimated from surveys.  The dotted lines show the progression of co-horts where large and small numbers at age can be tracked year to year."}
 #===
 # Data Prep
 #====
-# survcohorts <- read.csv(file = "Data/ple.27.21-32_CohortMatrix_1998-WorkingYear.csv", header = T)
-# survcohorts$Year <- as.factor(as.character(survcohorts$Year))
-
-# survcohortsLng <- reshape(data = survcohorts,
-#                       varying = list(colnames(survcohorts)[2:length((colnames(survcohorts)))]),
-#                       v.names = c("Age"),
-#                       timevar = "Cohort",
-#                       direction = "long")
-# # survcohortsLng$Age <- as.factor(as.character(survcohortsLng$Age))
-# survcohortsLng$Year <- as.factor(as.character(survcohortsLng$Year))
-# survcohortsLng <- survcohortsLng[survcohortsLng$Age <= 6, ]
-survcohortsLng <- catchcohortsLng
-survcohortsLng$Year <- as.factor(as.character(survcohortsLng$Year))
-survcohortsLng <- survcohortsLng[survcohortsLng$Year %in% c(1999:(DataYear+1)) & survcohortsLng$Age <= 7, ]
+survcohortsLng <- reshape(data = survcohorts,
+                           varying = list(colnames(survcohorts)[2:length((colnames(survcohorts)))]),
+                           v.names = c("Age"),
+                           timevar = "Cohort",
+                           direction = "long")
+survcohortsLng$Year <- as.numeric(as.character(survcohortsLng$Year))
 #=====
 
 #===

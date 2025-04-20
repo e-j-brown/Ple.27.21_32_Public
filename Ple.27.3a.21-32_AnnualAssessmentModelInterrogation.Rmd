@@ -1,0 +1,105 @@
+---
+title: "Ple.27.3a.21-32 Annual Assessment Model Interrogation"
+author:
+  - name: "Elliot J. Brown"
+  - name: "Sven Stötera"
+  - name: "Casper W. Berg"
+date: "`r format(Sys.Date(), '%d/%m/%Y')`"
+output: 
+  bookdown::html_document2:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    code_download: true
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 90% !important;
+  margin: auto;
+}
+p.caption {
+  font-size: 0.8em;
+  font-style: italic;
+}
+</style>
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo=TRUE,
+                      eval = TRUE,
+                      warning = FALSE,
+                      fig.align = "center",
+                      tidy = 'formatR',
+                      out.width = "90%")
+
+#===
+# Manual settings for figure formatting
+#====
+# ebpal <- c("#2F3EEA", "#1FD082", "#030F4F", "#F6D04D", "#FC7634", "#F7BBB1", "#E83F48", "#008835", "#79238E")
+ebpal <- c("#800080", "#006400", "#D55E00", "#0072B2", "#F0E442", "#009E73", "#E69F00", "#56B4E9", "#CC79A7", "#5DA5DA", "#FF8000", "#89CFF0", "#A52A2A", "#77DD77", "#FFFACD")
+#=====
+```
+
+# Introduction
+## About this document
+This interactive document downloads, refits, visualises and interrogates the assessment model from stockassessment.org.  The purpose is to provide an thorough quality control check on the model's performance, and to ensure the working group's (and any other interested parties') understanding of stock dynamics and model estimations. 
+
+Data compilation is done externally, and this document deals only with the finalised input files. All models are build using the State-Space Assessment Model (SAM), and in this version of the document, all model input files and configurations are downloaded directly from the publicly available versions on [stockassessment.org](https://stockassessment.org).
+
+The script that generates this document is one in a series which contribute to the production of advice for this plaice stock. To download the entire series, and associated directory structure, the project is available at GitHub: https://github.com/e-j-brown/Ple.27.21_32_Public.
+
+Most of the code used to process data and create visualisations are hidden in this HTML.  To view each chunk, simply click on the button to the right of the relevant section.  To download the entire R-markdown (.rmd) file including all text and code chunks, use the _code_ button at the top of the page, with the dropdown arrow.
+
+## Preparation
+To run the scripts embedded in this document (if you would like to run the assessment yourself) you require the following packages and functions:
+
+```{r message=FALSE, results="hide"}
+require(data.table)
+require(reshape2)
+require(knitr)
+require(scales)
+require(bookdown)
+require(ggplot2)
+require(ggthemes)
+require(stringr)
+require(lattice)
+require(plyr)
+require(plotly)
+require(icesAdvice)
+require("stockassessment") # available from https://github.com/fishfollower/SAM
+require(parallel)
+require(sf)
+
+myprop <- function(df, nomo = "nomo", NoAtLngt = "CANoAtLngt"){
+  t <- sum(df$nomo)/sum(df$CANoAtLngt)
+}
+
+catchFrac <- function(x, nm, w, frac){
+  F <- getF(x)
+  Z <- F+nm
+  N <- getN(x)
+  C <- F/Z*(1-exp(-Z))*N
+  return(sum(frac*w*C))
+}
+```
+
+We also need to set a few variables manually.  
+The first is the *DataYear*, which is the year immediately preceeding the assessment year or the year for which the most recent data is available.  
+The second is the catch we (ICES) advised as TAC for the last assessment *LastIcesAdvice*, in tonnes. __NOTE__ this value is taken from the advice sheet, to compare changes in advice, not changes in advice relative to actual Allowable Catches.
+The third is whether this run is exploratory, or to be used to generate the final advice. This option can be used to determine our conclusions and in some cases, the number of iterations used in parameter estimations. 
+
+```{r}
+DataYear <- 2024
+LastIcesAdvice <- 25365 # Advised catch for areas 21-32 (from stock splitting table in advice)
+isFinal <- FALSE
+# isFinal <- TRUE
+
+readPath <- paste0("../", (DataYear+1), "/Surveys/")
+dataPath <- paste0("DataProcessed/Surveys/")
+figPath <- paste0("Figures/")
+```
+
+# Baseline
+
+
+
