@@ -67,3 +67,6 @@ Assessment\ Input/**
 !Tables/**/
 !Assessment\ Input/
 !Assessment\ Input/**/
+
+# html files generated from .rmds
+*.html
