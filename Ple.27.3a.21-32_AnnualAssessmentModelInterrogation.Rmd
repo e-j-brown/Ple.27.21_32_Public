@@ -88,18 +88,664 @@ The first is the *DataYear*, which is the year immediately preceeding the assess
 The second is the catch we (ICES) advised as TAC for the last assessment *LastIcesAdvice*, in tonnes. __NOTE__ this value is taken from the advice sheet, to compare changes in advice, not changes in advice relative to actual Allowable Catches.
 The third is whether this run is exploratory, or to be used to generate the final advice. This option can be used to determine our conclusions and in some cases, the number of iterations used in parameter estimations. 
 
-```{r}
+We also utilise some reference points to contextualise the output estimates of the model and aid in our understanding of stock status, so we bring those in here, based on the 2024 Benchmark workshop results.
+
+Finally, we set a few paths to be able to find and save stuff.
+
+```{r prepFixedVariables}
 DataYear <- 2024
 LastIcesAdvice <- 25365 # Advised catch for areas 21-32 (from stock splitting table in advice)
 isFinal <- FALSE
 # isFinal <- TRUE
 
+## Reference points
+MSYBtrigger <- 13460
+Bpa <- 13460
+Blim <- 11119
+SSB_5pcMSY <- 11251.37
+Fpa <- 0.149
+Fmsy <- 0.149
+Fmsy_lower <- 0.137
+Fmsy_upper <- 0.149
+Fmsy_unconstrained <- 0.46
+
+Flim <- 0.57  # Not based on constraint rule and not used in advice but just FYI
+
+## repository paths
 readPath <- paste0("../", (DataYear+1), "/Surveys/")
 dataPath <- paste0("DataProcessed/Surveys/")
 figPath <- paste0("Figures/")
 ```
 
 # Baseline
+
+The baseline model we're using to comare this year's model against, is the final model from last year's Benchmark workshop, using catch data up until 2023 and survey data up to Q1 2025. This baseline model is called [ple.27.21-32_BASELAICE_2024_nmG5Fb_mo1_dsmed6](https://stockassessment.org/setStock.php?stock=ple.27.21-32_BASELAICE_2024_nmG5Fb_mo1_dsmed6) and can be found on [stockassessment.org](https://stockassessment.org).
+
+```{r BASEFitFromWeb}
+fit_BASE <- fitfromweb("ple.27.21-32_BASELAICE_2024_nmG5Fb_mo1_dsmed6")
+```
+
+```{r dataframeSummary_BASE, results='hide', fig.show='hide'}
+#===
+# Create dataframe of current year's fit for plotting
+#====
+asum_BASE <- as.data.frame(summary(fit_BASE))
+asum_BASE$Year <- as.integer(row.names(summary(fit_BASE)))
+ct_BASE <- as.data.frame(catchtable(fit_BASE, obs.show = TRUE))
+ct_BASE$Year <- as.integer(rownames(ct_BASE))
+rownames(ct_BASE) <- NULL
+ct_BASE <- rbind(ct_BASE, data.frame(Estimate = NA, Low=NA, High=NA, sop.catch=NA, Year=as.integer(2024)))
+asum_BASE <- merge(x = asum_BASE, y = ct_BASE, by = "Year")
+colnames(asum_BASE) <- c("Year", "R_age1", "Rlow", "Rhigh", "SSB", "SSBlow", "SSBhigh", "Fbar", "Flow", "Fhigh", "CatchEst", "Catchlow", "Catchhigh", "CatchObs")
+#=====
+```
+
+# Current Assessment Model
+
+## Fit Model
+
+This year's assessment model is based on the new Stock Annex procedure from the 2024 Benchmark workshop. This model is also available from [stockassessment.org](https://stockassessment.org), and is called [ple.27.21.32_WGBFAS_CURRENT](https://stockassessment.org/setStock.php?stock=ple.27.21.32_WGBFAS_CURRENT).
+
+```{r 2025_SAFitFromWeb}
+fit_CURRENT <- fitfromweb("ple.27.21.32_WGBFAS_2025_SA")
+```
+
+```{r dataframeSummary_CURRENT, results='hide', fig.show='hide'}
+#===
+# Create dataframe of current year's fit for plotting
+#====
+asum_CURRENT <- as.data.frame(summary(fit_CURRENT))
+asum_CURRENT$Year <- as.integer(row.names(summary(fit_CURRENT)))
+ct_CURRENT <- as.data.frame(catchtable(fit_CURRENT, obs.show = TRUE))
+ct_CURRENT$Year <- as.integer(rownames(ct_CURRENT))
+rownames(ct_CURRENT) <- NULL
+ct_CURRENT <- rbind(ct_CURRENT, data.frame(Estimate = NA, Low=NA, High=NA, sop.catch=NA, Year=as.integer(DataYear+1)))
+asum_CURRENT <- merge(x = asum_CURRENT, y = ct_CURRENT, by = "Year")
+colnames(asum_CURRENT) <- c("Year", "R_age1", "Rlow", "Rhigh", "SSB", "SSBlow", "SSBhigh", "Fbar", "Flow", "Fhigh", "CatchEst", "Catchlow", "Catchhigh", "CatchObs")
+#=====
+```
+
+# Interrogate Model Fits
+## Fits to Data
+
+When the model is run we can easily see from warnings/errors if there is a convergence issue.  However, we can also confirm this, explicitly:
+
+- The final model gradient: `r fit_CURRENT$opt$evaluations[2]`
+- That there is a positive definite hessian: `r all(eigen(fit_CURRENT$opt$he)$values >0)`
+
+Furthermore, SAM does not utilise "bounds" when fitting the model, and therefore, as standard check of whether model parameters are approaching their bounds is irrelevant.
+
+```{r fig.cap="This year's, stock annex based assessment model's fit to catch data by age (values on the model link function scale).", fig.height=8}
+## Extract data from model object
+logObs_CURRENT <- split(fit_CURRENT$data$logobs, ceiling(seq_along(fit_CURRENT$data$logobs)/fit_CURRENT$data$maxAgePerFleet[1]))
+logPred_CURRENT <- split(fit_CURRENT$rep$predObs, ceiling(seq_along(fit_CURRENT$rep$predObs)/fit_CURRENT$data$maxAgePerFleet[1]))
+
+## Transform data to useable dataframes
+### Initialize an empty data frame for observations
+logObs_CURRENT_df <- data.frame(age = integer(),
+                                         fleet = integer(),
+                                         year = integer(),
+                                         logObs = numeric())
+
+### Populate the data frame for observations
+for (i in seq_along(logObs_CURRENT)) {
+  # Calculate the group and year
+  year <- ((i - 1) %/% 3) + 1
+  fleet <- ((i - 1) %% 3) + 1
+  
+  ### Create a temporary data frame and append to the main data frame for observations
+  temp_df <- data.frame(age = 1:7,
+                        fleet = fleet,
+                        year = year+2001,
+                        logObs = logObs_CURRENT[[i]])
+  logObs_CURRENT_df <- rbind(logObs_CURRENT_df, temp_df)
+}
+
+### Initialize an empty data frame for predictions
+logPred_CURRENT_df <- data.frame(age = integer(),
+                                          fleet = integer(),
+                                          year = integer(),
+                                          logPred = numeric())
+
+### Populate the data frame for predictions
+for (i in seq_along(logPred_CURRENT)) {
+  # Calculate the group and year
+  year <- ((i - 1) %/% 3) + 1
+  fleet <- ((i - 1) %% 3) + 1
+  
+  ### Create a temporary data frame and append to the main data frame for predictions
+  temp_df <- data.frame(age = 1:7,
+                        fleet = fleet,
+                        year = year+2001,
+                        logPred = logPred_CURRENT[[i]])
+  logPred_CURRENT_df <- rbind(logPred_CURRENT_df, temp_df)
+}
+
+## Plot
+logPred_CURRENT_df$age <- as.character(logPred_CURRENT_df$age)
+logObs_CURRENT_df$age <- as.character(logObs_CURRENT_df$age)
+
+ggplotly(ggplot()+
+           geom_point(data = logObs_CURRENT_df[logObs_CURRENT_df$fleet == 1 & logObs_CURRENT_df$year != (DataYear+1), ],
+                      mapping = aes(x = year,
+                                    y = logObs,
+                                    colour = age),
+                      shape = 21) +
+           geom_line(data = logPred_CURRENT_df[logPred_CURRENT_df$fleet == 1 & logPred_CURRENT_df$year != (DataYear+1), ],
+                     mapping = aes(x = year,
+                                   y = logPred,
+                                   colour = age)) +
+           facet_wrap(facets = "age") + #, scales = "free_y") +
+           scale_color_manual(values = ebpal, guide = FALSE) +
+           guides(colour=FALSE, shape=FALSE) +
+           theme_few())
+
+# fitplot(fit_CURRENT, fleets=1)
+```
+
+
+```{r fig.cap="This year's, stock annex based assessment model's fit to Q1 survey data by age (values on the model link function scale).", fig.height=8}
+ggplotly(ggplot()+
+           geom_point(data = logObs_CURRENT_df[logObs_CURRENT_df$fleet == 2 & logObs_CURRENT_df$year != (DataYear+1), ],
+                      mapping = aes(x = year,
+                                    y = logObs,
+                                    colour = age),
+                      shape = 21) +
+           geom_line(data = logPred_CURRENT_df[logPred_CURRENT_df$fleet == 2 & logPred_CURRENT_df$year != (DataYear+1), ],
+                     mapping = aes(x = year,
+                                   y = logPred,
+                                   colour = age)) +
+           facet_wrap(facets = "age") + #, scales = "free_y") +
+           scale_color_manual(values = ebpal, guide = FALSE) +
+           guides(colour=FALSE, shape=FALSE) +
+           theme_few())
+# fitplot(fit_CURRENT, fleets=2)
+```
+
+```{r fig.cap="This year's, stock annex based assessment model's fit to Q3/4 survey data by age (values on the model link function scale).", fig.height=8}
+ggplotly(ggplot()+
+           geom_point(data = logObs_CURRENT_df[logObs_CURRENT_df$fleet == 3 & logObs_CURRENT_df$year != (DataYear+1), ],
+                      mapping = aes(x = year,
+                                    y = logObs,
+                                    colour = age),
+                      shape = 21) +
+           geom_line(data = logPred_CURRENT_df[logPred_CURRENT_df$fleet == 3 & logPred_CURRENT_df$year != (DataYear+1), ],
+                     mapping = aes(x = year,
+                                   y = logPred,
+                                   colour = age)) +
+           facet_wrap(facets = "age") + #, scales = "free_y") +
+           scale_color_manual(values = ebpal, guide = FALSE) +
+           guides(colour=FALSE, shape=FALSE) +
+           theme_few())
+
+# fitplot(fit_CURRENT, fleets=3)
+```
+
+```{r fig.cap="Standard Devations by Fleet; medium discard survival estimates.", height=8}
+sdplot(fit_CURRENT, marg = c(5,4,1,1))
+```
+
+## Residuals
+```{r calculateResiduals_CURRENT, warning=FALSE, results='hide'}
+resid_CURRENT <- residuals(fit_CURRENT)
+resid_CURRENT_df <- data.frame(year = resid_CURRENT$year,
+                                        fleet = resid_CURRENT$fleet,
+                                        age = resid_CURRENT$age,
+                                        observation = resid_CURRENT$observation,
+                                        mean = resid_CURRENT$mean,
+                                        residual = resid_CURRENT$residual)
+resid_CURRENT_df$fleetName <- ifelse(resid_CURRENT_df$fleet == 1, attributes(resid_CURRENT)$fleetNames[1], 
+                                              ifelse(resid_CURRENT_df$fleet == 2, attributes(resid_CURRENT)$fleetNames[2], 
+                                                     ifelse(resid_CURRENT_df$fleet == 3, attributes(resid_CURRENT)$fleetNames[3], NA)))
+
+resid_CURRENT_df$fleetAltName <- ifelse(resid_CURRENT_df$fleet == 1, "Residual Fishing", 
+                                                 ifelse(resid_CURRENT_df$fleet == 2, "Q1 Surveys", 
+                                                        ifelse(resid_CURRENT_df$fleet == 3, "Q3/4 Surveys", NA)))
+```
+
+```{r fig.cap="Estimated correlations in residual variation between ages for each of the fishing fleet (top) and the two surveys (middle & bottom), from the Model with medium discard mortality."}
+
+if(!all(fit_CURRENT$conf$obsCorStruct=="ID")){ 
+  corplot(fit_CURRENT)			  
+  # setcap("Estimated correlations", "Estimates correlations between age groups for each fleet")
+  # stampit(fit)
+} else {
+  print("No correlation structure configured for residuals across age.")
+}
+
+```
+
+```{r fig.cap="One observation ahead residuals for the three fleets (red/pink = observation higher than model estimate, blue = observation lower than model estimate, size = magnitude of residual).", fig.height=8}
+ggplotly(ggplot(resid_CURRENT_df) +
+           geom_point(mapping = aes(x = year,
+                                    y = age,
+                                    size = abs(residual),
+                                    colour = residual >= 0),
+                      alpha = 0.7) +
+           facet_grid(rows = "fleetAltName") +
+           scale_colour_manual(values = c("TRUE" = ebpal[8], "FALSE" = ebpal[9])) +
+           scale_y_continuous(limits = c(-1, 9), breaks = c(1:9)) +
+           guides(colour=FALSE) +
+           theme_few())
+
+```
+
+## Jittering
+We can also test to see if the model is converging on some local minimum (i.e. it's fitting to some solution close to initialising values that represents noise and not the global solution, that is the proper solution).  To do this, we add random noise to the initial parameter values to see if the model will converge on a different minimum in it's data-space. The easiest way to investigate this is to see if the model fits vary alot depending on the starting values:
+```{r Jitter_CURRENT}
+jit_CURRENT <- jit(fit = fit_CURRENT)
+
+mt <- as.data.frame(modeltable(jit_CURRENT))
+mt$model <- rownames(mt)
+rownames(mt) <- NULL
+
+kable(x = mt,
+      digits = 3,
+      caption = "Measures of  fit for a series of model refits with jitter applied to the input parameters.")
+```
+
+# Model Estimates
+
+Now that we've looked at how the model is fitting and performing, we can consider how the estimates of the status look and compare them to current reference points.
+
+```{r recreateAsum, eval=FALSE}
+#===
+# Create dataframe of current year's fit for plotting
+#====
+asum_CURRENT <- as.data.frame(summary(fit_CURRENT))
+asum_CURRENT$Year <- as.integer(row.names(summary(fit_CURRENT)))
+ct_CURRENT <- as.data.frame(catchtable(fit_CURRENT, obs.show = TRUE))
+ct_CURRENT$Year <- as.integer(rownames(ct_CURRENT))
+rownames(ct_CURRENT) <- NULL
+ct_CURRENT <- rbind(ct_CURRENT, data.frame(Estimate = NA, Low=NA, High=NA, sop.catch=NA, Year=as.integer(DataYear+1)))
+asum_CURRENT <- merge(x = asum_CURRENT, y = ct_CURRENT, by = "Year")
+colnames(asum_CURRENT) <- c("Year", "R_age1", "Rlow", "Rhigh", "SSB", "SSBlow", "SSBhigh", "Fbar", "Flow", "Fhigh", "CatchEst", "Catchlow", "Catchhigh", "CatchObs")
+#=====
+```
+
+
+```{r fig.cap= "Estimated spawning stock biomass for ple.27.21-32 and 95% confidence intervals (tonnes). Purple is the baseline model, while green is the outcome of the current stock annex procedure with the latest data. Reference points MSY B-trigger (orange), Bpa (orange, dotted),  and Blim (darker orange) are the horizontal lines."}
+pssb <- ggplot() +
+  geom_line(data = asum_BASE,
+            mapping = aes(x=Year,
+                          y=SSB,
+                          series="Baseline"),
+            colour = ebpal[1]) +
+  geom_ribbon(data = asum_BASE,
+              mapping = aes(x=Year,
+                            ymin=SSBlow,
+                            ymax=SSBhigh),
+              fill = ebpal[1],
+              alpha = 0.3) +
+  geom_line(data = asum_CURRENT,
+            mapping = aes(x=Year,
+                          y=SSB,
+                          series="Current Year SA"),
+            colour = ebpal[2]) +
+  geom_ribbon(data = asum_CURRENT,
+              mapping = aes(x=Year,
+                            ymin=SSBlow,
+                            ymax=SSBhigh),
+              fill = ebpal[2],
+              alpha = 0.3) +
+  geom_hline(yintercept = Bpa,
+             colour = ebpal[3],
+             linetype = "dotted",
+             aes(series="Bpa")) +
+  geom_hline(yintercept = MSYBtrigger,
+             colour = ebpal[11],
+             mapping = aes(series="MSY B-trigger")) +
+  geom_hline(yintercept = Blim,
+             colour = ebpal[3],
+             mapping = aes(series="Blim")) +
+  theme_clean()
+
+ggplotly(pssb, tooltip = c("series", "x", "y"))
+```
+
+
+```{r fig.cap= "Annual fishing mortality estimates for ple.27.21-32 ages 3-5 and point wise 95% confidence intervals are shown by line and shaded area.   Purple is the baseline model, while green is the outcome of the current stock annex procedure with the latest data. Reference points Fmsy (orange), Fpa (orange, dotted), and Flim (darker orange) are the horizontal lines."}
+pfbar <- ggplot() +
+  geom_line(data = asum_BASE,
+            mapping = aes(x=Year,
+                          y=Fbar,
+                          series="Baseline"),
+            colour = ebpal[1]) +
+  geom_ribbon(data = asum_BASE,
+              mapping = aes(x=Year,
+                            ymin=Flow,
+                            ymax=Fhigh,
+                            series="Baseline"),
+              fill = ebpal[1],
+              alpha = 0.3) +
+  geom_line(data = asum_CURRENT,
+            mapping = aes(x=Year,
+                          y=Fbar,
+                          series="Current Year SA"),
+            colour = ebpal[2]) +
+  geom_ribbon(data = asum_CURRENT,
+              mapping = aes(x=Year,
+                            ymin=Flow,
+                            ymax=Fhigh,
+                            series="Current Year SA"),
+              fill = ebpal[2],
+              alpha = 0.3) +
+  geom_hline(yintercept = Fpa,
+             colour = ebpal[3],
+             linetype = "dotted",
+             aes(series="Fpa")) +
+  geom_hline(yintercept = Fmsy,
+             colour = ebpal[11],
+             aes(series="Fmsy")) +
+  geom_hline(yintercept = Flim,
+             colour = ebpal[3],
+             aes(series="Flim")) +
+  theme_clean()
+
+ggplotly(pfbar, tooltip = c("series", "x", "y"))
+```
+
+```{r fig.cap= "Annual recruitment estimates for ple.27.21-32 and point wise 95% confidence intervals are shown by line and shaded area (numbers). Purple is the baseline model, while green is the outcome of the current stock annex procedure with the latest data."}
+prec <- ggplot() +
+  geom_line(data = asum_BASE,
+            mapping = aes(x=Year,
+                          y=R_age1,
+                          series="Baseline"),
+            colour = ebpal[1]) +
+  geom_ribbon(data = asum_BASE,
+              mapping = aes(x=Year,
+                            ymin=Rlow,
+                            ymax=Rhigh,
+                            series="Baseline"),
+              fill = ebpal[1],
+              alpha = 0.3) +
+  geom_line(data = asum_CURRENT,
+            mapping = aes(x=Year,
+                          y=R_age1,
+                          series="Current Year SA"),
+            colour = ebpal[2]) +
+  geom_ribbon(data = asum_CURRENT,
+              mapping = aes(x=Year,
+                            ymin=Rlow,
+                            ymax=Rhigh,
+                            series="Current Year SA"),
+              fill = ebpal[2],
+              alpha = 0.3) +
+  theme_clean()
+
+ggplotly(prec, tooltip = c("series", "x", "y"))
+```
+
+```{r fig.cap= "Annual catch estimates and 95% confidence intervals (line and shaded area, respectively) for ple.27.21-32 and point annual observations (points).  Purple is the baseline model, while green is the outcome of the current stock annex procedure with the latest data, and orange are the observations."}
+pcat <- ggplot() +
+  geom_line(data = asum_BASE[asum_BASE$Year != (DataYear), ],
+            mapping = aes(x=Year,
+                          y=CatchEst,
+                          series="Baseline"),
+            colour = ebpal[1]) +
+  geom_ribbon(data = asum_BASE[asum_BASE$Year != (DataYear), ],
+              mapping = aes(x=Year,
+                            ymin=Catchlow,
+                            ymax=Catchhigh,
+                            series="Baseline"),
+              fill = ebpal[1],
+              alpha = 0.3) +
+  geom_line(data = asum_CURRENT[asum_CURRENT$Year != (DataYear+1), ],
+            mapping = aes(x=Year,
+                          y=CatchEst,
+                          series="Current Year SA"),
+            colour = ebpal[2]) +
+  geom_ribbon(data = asum_CURRENT[asum_CURRENT$Year != (DataYear+1), ],
+              mapping = aes(x=Year,
+                            ymin=Catchlow,
+                            ymax=Catchhigh,
+                            series="Current Year SA"),
+              fill = ebpal[2],
+              alpha = 0.3) +
+  geom_point(data = asum_CURRENT[asum_CURRENT$Year != max(asum_CURRENT$Year), ],
+             mapping = aes(x=Year,
+                           y=CatchObs,
+                           series="Observed Catches"),
+             shape = 3,
+             colour = ebpal[3],
+             fill = ebpal[3]) +
+  theme_clean()
+
+ggplotly(pcat, tooltip = c("series", "x", "y"))
+```
+
+# Model Performance and Sensitivities
+## Leave-One-Out Analyses
+A leave-one-out analysis is a form of sensitivity analysis, showing the impact the data from each tuning fleet has on the estimation of the key variables being estimated; namely SSB, F and recruitment.  
+
+First we must run the leave-one-out analysis which refits the model in two iterations, removing one survey at a time. Then we can plot each of these new model fits over the full model to see the impact the removal of each has. 
+
+```{r LeaveOneOut_CURRENT}
+LO_CURRENT <- leaveout(fit_CURRENT)
+
+#=== 
+# Get data from sam objects and generate useable dataframes
+#====
+q1mat <- as.data.frame(summary(LO_CURRENT$`w.o. Q1IBTS+BITS1-7+`))
+q3mat <- as.data.frame(summary(LO_CURRENT$`w.o. Q4IBTS+BITS1-7+`))
+
+
+woq1 <- data.frame(Year = as.integer(row.names(summary(LO_CURRENT$`w.o. Q1IBTS+BITS1-7+`))),
+                   SSB = q1mat$SSB,
+                   Fbar = q1mat$`Fbar(3-6)`,
+                   R_age1 = q1mat$`R(age 1)`,
+                   CatchEst = catchtable(LO_CURRENT$`w.o. Q1IBTS+BITS1-7+`)[,1],
+                   series = rep("wo_Q1", times = nrow(q1mat)))
+
+woq34 <- data.frame(Year = as.integer(row.names(summary(LO_CURRENT$`w.o. Q4IBTS+BITS1-7+`))),
+                    SSB = q3mat[, "SSB"],
+                    Fbar = q3mat[,"Fbar(3-6)"],
+                    R_age1 = q3mat[,"R(age 1)"],
+                    CatchEst = c(catchtable(LO_CURRENT$`w.o. Q4IBTS+BITS1-7+`)[,1], setNames(NA, (DataYear+1))),
+                    series = rep("wo_Q34", times = (nrow(q3mat))))
+
+
+asum_CURRENT$series <- rep("full", times = nrow(asum_CURRENT))
+asumi_CURRENT <- asum_CURRENT[, c("Year", "SSB", "Fbar", "R_age1", "CatchEst" ,"series")]
+#=====
+
+losum_CURRENT <- rbind(woq1, woq34, asumi_CURRENT)
+losum_CURRENT[losum_CURRENT$Year == (DataYear+1), "Fbar"] <- NA  # Remove estimate for assessment year as it makes no sense to estimate without catch data.
+
+```
+
+```{r fig.cap="Leave-one-out re-fits for the model with medium discard survival (without Q1 survey = blue, without Q3/4 survey = purple), overlain with full model estimates (black line and grey ribbon) of SSB (top left), F (top right), Recruitment (bottom left), and catch (bottom right; observations as yellow + and ribbon broken by interactive tool)."}
+# ssbplot(LO)
+lossb_CURRENT <- ggplotly(ggplot() +
+                                     geom_line(data = losum_CURRENT,
+                                               mapping = aes(x=Year,
+                                                             y=SSB,
+                                                             colour = series)) +
+                                     geom_ribbon(data = asum_CURRENT,
+                                                 mapping = aes(x=Year,
+                                                               ymin=SSBlow,
+                                                               ymax=SSBhigh),
+                                                 fill = "black",
+                                                 alpha = 0.2) +
+                                     scale_colour_manual(values = c("black", ebpal[8:9])) +
+                                     theme_clean() +
+                                     theme(axis.title.y.left = element_text(vjust = -0.05, hjust = 0.95)))
+
+# Fplot(LO)
+lof_CURRENT <- ggplotly(ggplot() +
+                                   geom_line(data = losum_CURRENT,
+                                             mapping = aes(x=Year,
+                                                           y=Fbar,
+                                                           colour = series)) +
+                                   geom_ribbon(data = asum_CURRENT[asum_CURRENT$Year != (DataYear+1),],
+                                               mapping = aes(x=Year,
+                                                             ymin=Flow,
+                                                             ymax=Fhigh),
+                                               fill = "black",
+                                               alpha = 0.3) +
+                                   scale_colour_manual(values = c("black", ebpal[8:9])) +
+                                   theme_clean() +
+                                   theme(axis.title.y.left = element_text(vjust = -0.05, hjust = 0.95)))
+
+# recplot(LO)
+lorec_CURRENT <- ggplotly(ggplot() +
+                                     geom_line(data = losum_CURRENT,
+                                               mapping = aes(x=Year,
+                                                             y=R_age1,
+                                                             colour = series)) +
+                                     geom_ribbon(data = asum_CURRENT,
+                                                 mapping = aes(x=Year,
+                                                               ymin=Rlow,
+                                                               ymax=Rhigh),
+                                                 fill = "black",
+                                                 alpha = 0.3) +
+                                     scale_colour_manual(values = c("black", ebpal[8:9])) +
+                                     theme_clean() +
+                                     theme(axis.title.y.left = element_text(vjust = -0.05, hjust = 0.95)))
+
+# Catch plot (LO)
+loca_CURRENT <- ggplotly(ggplot() +
+                                    geom_line(data = losum_CURRENT,
+                                              mapping = aes(x=Year,
+                                                            y=CatchEst,
+                                                            colour = series))+
+                                    geom_ribbon(data = asum_CURRENT[asum_CURRENT$Year != (DataYear+1), ],
+                                                mapping = aes(x=Year,
+                                                              ymin=Catchlow,
+                                                              ymax=Catchhigh),
+                                                fill = "black",
+                                                alpha = 0.3) +
+                                    geom_point(data = asum_CURRENT[asum_CURRENT$Year != (DataYear+1), ],
+                                               mapping = aes(x=Year,
+                                                             y=CatchObs),
+                                               shape = 3,
+                                               colour = ebpal[5],
+                                               fill = ebpal[5]) +
+                                    ylab("Catch (tonnes)") +
+                                    scale_colour_manual(values = c("black", ebpal[8:9]))+ 
+                                    theme_clean() +
+                                    theme(axis.title.y.left = element_text(vjust = -0.05, hjust = 0.95)))
+
+layout(subplot(lossb_CURRENT, lof_CURRENT, lorec_CURRENT, loca_CURRENT, nrows = 2, shareX = TRUE, titleY = TRUE), showlegend=FALSE)
+```
+
+### Retrospectives
+```{r calculateRetros_CURRENT}
+RETRO_CURRENT<-retro(fit_CURRENT, year=5)
+rho_CURRENT <- mohn(RETRO_CURRENT, lag = 1)
+
+## Make RETROs in better plotting format
+ret_CURRENT_df <- asum_CURRENT[asum_CURRENT$Year != max(asum_CURRENT$Year), ]
+
+for(i in 1:length(RETRO_CURRENT)){
+  tsum <- as.data.frame(summary(RETRO_CURRENT[[i]]))
+  tsum$Year <- as.integer(row.names(summary(RETRO_CURRENT[[i]])))
+  tsum <- cbind(tsum, catchtable(RETRO_CURRENT[[i]], obs.show = TRUE))
+  tsum$series <- as.character(rep(i, nrow(tsum)))
+  colnames(tsum) <- c("R_age1", "Rlow", "Rhigh", "SSB", "SSBlow", "SSBhigh", "Fbar", "Flow", "Fhigh", "Year", "CatchEst", "Catchlow", "Catchhigh", "CatchObs", "series")
+  tsum <- tsum[tsum$Year != max(tsum$Year), ]
+  ret_CURRENT_df <- rbind(ret_CURRENT_df, tsum)
+}
+ret_CURRENT_df$series <- factor(ret_CURRENT_df$series, levels = c("full", "1", "2", "3", "4", "5"))
+```
+
+```{r fig.cap="Retrospective analyses for SSB (top-left), F for ages 3-5 (top-right), recruitment (bottom-left), and catch (bottom-right), from the model with medium discard survival."}
+# ssbplot(RETRO)
+retssb_CURRENT <- layout(ggplotly(ggplot() +
+                                             geom_line(data = ret_CURRENT_df,
+                                                       mapping = aes(x=Year,
+                                                                     y=SSB,
+                                                                     colour = series)) +
+                                             geom_ribbon(data = asum_CURRENT[asum_CURRENT$Year != max(asum_CURRENT$Year), ],
+                                                         mapping = aes(x=Year,
+                                                                       ymin=SSBlow,
+                                                                       ymax=SSBhigh),
+                                                         fill = "black",
+                                                         alpha = 0.2) +
+                                             annotate(geom = "text",
+                                                      y = max(ret_CURRENT_df$SSBhigh)*0.85,
+                                                      x = ((max(ret_CURRENT_df$Year)-min(ret_CURRENT_df$Year))*0.20)+min(ret_CURRENT_df$Year),
+                                                      label = paste0("Mohn's Rho = ", round(rho_CURRENT[2], digits = 3))) +
+                                             scale_colour_manual(values = c("black", ebpal[(length(ebpal)-4):length(ebpal)])) +
+                                             theme_clean() +
+                                             theme(legend.position = "none",
+                                                   axis.title.y.left = element_text(vjust = -0.05, hjust = 0.95))),
+                                  showlegend = FALSE)
+
+# Fplot(RETRO)
+retf_CURRENT <- layout(ggplotly(ggplot() +
+                                           geom_line(data = ret_CURRENT_df,
+                                                     mapping = aes(x=Year,
+                                                                   y=Fbar,
+                                                                   colour = series)) +
+                                           geom_ribbon(data = asum_CURRENT[asum_CURRENT$Year != max(asum_CURRENT$Year), ],
+                                                       mapping = aes(x=Year,
+                                                                     ymin=Flow,
+                                                                     ymax=Fhigh),
+                                                       fill = "black",
+                                                       alpha = 0.3) +
+                                           annotate(geom = "text",
+                                                    y = max(ret_CURRENT_df$Fhigh)*0.85,
+                                                    x = ((max(ret_CURRENT_df$Year)-min(ret_CURRENT_df$Year))*0.80)+min(ret_CURRENT_df$Year),
+                                                    label = paste0("Mohn's Rho = ", round(rho_CURRENT[3], digits = 3))) +
+                                           scale_colour_manual(values = c("black", ebpal[(length(ebpal)-4):length(ebpal)])) +
+                                           theme_clean() +
+                                           theme(legend.position = "none",
+                                                 axis.title.y.left = element_text(vjust = -0.05, hjust = 0.95))),
+                                showlegend = FALSE)
+
+# recplot(RETRO)
+retrec_CURRENT <- layout(ggplotly(ggplot() +
+                                             geom_line(data = ret_CURRENT_df,
+                                                       mapping = aes(x=Year,
+                                                                     y=R_age1,
+                                                                     colour = series)) +
+                                             geom_ribbon(data = asum_CURRENT[asum_CURRENT$Year != max(asum_CURRENT$Year), ],
+                                                         mapping = aes(x=Year,
+                                                                       ymin=Rlow,
+                                                                       ymax=Rhigh),
+                                                         fill = "black",
+                                                         alpha = 0.3) +
+                                             annotate(geom = "text",
+                                                      y= max(ret_CURRENT_df$Rhigh)*0.85,
+                                                      x = ((max(ret_CURRENT_df$Year)-min(ret_CURRENT_df$Year))*0.20)+min(ret_CURRENT_df$Year),
+                                                      label = paste0("Mohn's Rho = ", round(rho_CURRENT[1], digits = 3))) +
+                                             scale_colour_manual(values = c("black", ebpal[(length(ebpal)-4):length(ebpal)])) +
+                                             theme_clean() +
+                                             theme(legend.position = "none",
+                                                   axis.title.y.left = element_text(vjust = -0.05, hjust = 0.95))),
+                                  showlegend = FALSE)
+
+## Catch plot (RETRO)
+retca_CURRENT <- ggplotly(ggplot() +
+                                     geom_line(data = ret_CURRENT_df,
+                                               mapping = aes(x=Year,
+                                                             y=CatchEst,
+                                                             colour = series))+
+                                     geom_ribbon(data = asum_CURRENT[asum_CURRENT$Year != max(asum_CURRENT$Year), ],
+                                                 mapping = aes(x=Year,
+                                                               ymin=Catchlow,
+                                                               ymax=Catchhigh),
+                                                 fill = "black",
+                                                 alpha = 0.3) +
+                                     geom_point(data = asum_CURRENT[asum_CURRENT$Year != max(asum_CURRENT$Year), ],
+                                                mapping = aes(x=Year,
+                                                              y=CatchObs),
+                                                shape = 3,
+                                                colour = ebpal[5],
+                                                fill = ebpal[5]) +
+                                     ylab("Catch (tonnes)") +
+                                     scale_colour_manual(values = c("black", ebpal[(length(ebpal)-4):length(ebpal)]))+ 
+                                     theme_clean() +
+                                     theme(axis.title.y.left = element_text(vjust = -0.05, hjust = 0.95)))
+
+ret_fp <- style(subplot(retssb_CURRENT, retf_CURRENT, retrec_CURRENT, retca_CURRENT, nrows = 2, shareX = FALSE, shareY = FALSE, titleY = TRUE),
+                showlegend=FALSE,
+                traces = c(8:((7*4)+2)))
+
+layout(ret_fp, legend = list(orientation = 'h', x = 0.5, xanchor = 'center', y = -0.05, yanchor = 'top', borderwidth = 0))
+```
+
 
 
 

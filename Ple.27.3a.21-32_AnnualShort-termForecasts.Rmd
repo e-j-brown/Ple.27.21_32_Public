@@ -1,0 +1,615 @@
+---
+title: "Ple.27.3a.21-32 Annual Short-term Forecasts"
+author:
+  - name: "Elliot J. Brown"
+  - name: "Sven Stötera"
+  - name: "Casper W. Berg"
+date: "`r format(Sys.Date(), '%d/%m/%Y')`"
+output: 
+  bookdown::html_document2:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    code_download: true
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 90% !important;
+  margin: auto;
+}
+p.caption {
+  font-size: 0.8em;
+  font-style: italic;
+}
+</style>
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo=TRUE,
+                      eval = TRUE,
+                      warning = FALSE,
+                      fig.align = "center",
+                      tidy = 'formatR',
+                      out.width = "90%")
+
+#===
+# Manual settings for figure formatting
+#====
+# ebpal <- c("#2F3EEA", "#1FD082", "#030F4F", "#F6D04D", "#FC7634", "#F7BBB1", "#E83F48", "#008835", "#79238E")
+ebpal <- c("#800080", "#006400", "#D55E00", "#0072B2", "#F0E442", "#009E73", "#E69F00", "#56B4E9", "#CC79A7", "#5DA5DA", "#FF8000", "#89CFF0", "#A52A2A", "#77DD77", "#FFFACD")
+#=====
+```
+
+# Introduction
+## About this document
+This interactive document downloads and refits the selected assessment model from stockassessment.org, before forecasting a series of future scenarios to inform managers.
+
+The script that generates this document is one in a series which contribute to the production of advice for this plaice stock. To download the entire series, and associated directory structure, the project is available at GitHub: https://github.com/e-j-brown/Ple.27.21_32_Public.
+
+The data used in the assessment model is documented in a data compilation document, which is created from the above repository.  The assessment itself is built using the State-Space Assessment Model (SAM), and in this version of the document, all model input files and configurations are downloaded directly from the publicly available versions on [stockassessment.org](https://stockassessment.org). A thorough interrogation of this model is also done in "Annual Assessment Model" document, created from the above github repository.
+
+Most of the code used to process data and create visualisations are hidden in this HTML.  To view each chunk, simply click on the button to the right of the relevant section.  To download the entire R-markdown (.rmd) file including all text and code chunks, use the _code_ button at the top of the page, with the dropdown arrow.
+
+## Preparation
+To run the scripts embedded in this document (if you would like to run the assessment yourself) you require the following packages and functions:
+
+```{r message=FALSE, results="hide"}
+require(data.table)
+require(reshape2)
+require(knitr)
+require(scales)
+require(bookdown)
+require(ggplot2)
+require(ggthemes)
+require(stringr)
+require(lattice)
+require(plyr)
+require(plotly)
+require(icesAdvice)
+require("stockassessment") # available from https://github.com/fishfollower/SAM
+require(parallel)
+require(sf)
+
+myprop <- function(df, nomo = "nomo", NoAtLngt = "CANoAtLngt"){
+  t <- sum(df$nomo)/sum(df$CANoAtLngt)
+}
+
+catchFrac <- function(x, nm, w, frac){
+  F <- getF(x)
+  Z <- F+nm
+  N <- getN(x)
+  C <- F/Z*(1-exp(-Z))*N
+  return(sum(frac*w*C))
+}
+```
+
+We also need to set a few variables manually.  
+The first is the *DataYear*, which is the year immediately preceeding the assessment year or the year for which the most recent data is available.  
+The second is the catch we (ICES) advised as TAC for the last assessment *LastIcesAdvice*, in tonnes. __NOTE__ this value is taken from the advice sheet, to compare changes in advice, not changes in advice relative to actual Allowable Catches.
+The third is whether this run is exploratory, or to be used to generate the final advice. This option can be used to determine our conclusions and in some cases, the number of iterations used in parameter estimations. 
+
+We also utilise some reference points to contextualise the output estimates of the model and aid in our understanding of stock status, so we bring those in here, based on the 2024 Benchmark workshop results.
+
+Finally, we set a few paths to be able to find and save stuff.
+
+```{r prepFixedVariables}
+DataYear <- 2024
+LastIcesAdvice <- 25365 # Advised catch for areas 21-32 (from stock splitting table in advice)
+isFinal <- FALSE
+# isFinal <- TRUE
+
+## Reference points
+MSYBtrigger <- 13460
+Bpa <- 13460
+Blim <- 11119
+SSB_5pcMSY <- 11251.37
+Fpa <- 0.149
+Fmsy <- 0.149
+Fmsy_lower <- 0.137
+Fmsy_upper <- 0.149
+Fmsy_unconstrained <- 0.46
+
+Flim <- 0.57  # Not based on constraint rule and not used in advice but just FYI
+
+## repository paths
+readPath <- paste0("../", (DataYear+1), "/Surveys/")
+dataPath <- paste0("DataProcessed/Surveys/")
+figPath <- paste0("Figures/")
+```
+
+# Selected Assessment Model
+The model selected for creating forecasts and advice, this year, is called [ple.27.21.32_WGBFAS_CURRENT](https://stockassessment.org/setStock.php?stock=ple.27.21.32_WGBFAS_CURRENT) and is available from [stockassessment.org](https://stockassessment.org).
+
+```{r 2025_SAFitFromWeb}
+fit_CURRENT <- fitfromweb("ple.27.21.32_WGBFAS_2025_SA")
+```
+
+```{r dataframeSummary_CURRENT, results='hide', fig.show='hide'}
+#===
+# Create dataframe of current year's fit for plotting
+#====
+asum_CURRENT <- as.data.frame(summary(fit_CURRENT))
+asum_CURRENT$Year <- as.integer(row.names(summary(fit_CURRENT)))
+ct_CURRENT <- as.data.frame(catchtable(fit_CURRENT, obs.show = TRUE))
+ct_CURRENT$Year <- as.integer(rownames(ct_CURRENT))
+rownames(ct_CURRENT) <- NULL
+ct_CURRENT <- rbind(ct_CURRENT, data.frame(Estimate = NA, Low=NA, High=NA, sop.catch=NA, Year=as.integer(DataYear+1)))
+asum_CURRENT <- merge(x = asum_CURRENT, y = ct_CURRENT, by = "Year")
+colnames(asum_CURRENT) <- c("Year", "R_age1", "Rlow", "Rhigh", "SSB", "SSBlow", "SSBhigh", "Fbar", "Flow", "Fhigh", "CatchEst", "Catchlow", "Catchhigh", "CatchObs")
+#=====
+```
+
+# Short Term Forecast Scenarios
+## Forecast configurations
+Short term forecasts are run for a number of different scenarios according to different forms of catch advice that have been requested in the past, or may be relevant in various scenarios.   
+
+The below code generates a long list of scenarios.  Depending on whether the object _isFinal_, at the top of the document, is set to TRUE or FALSE, these forecasts are estimated with more or fewer iterations, respectively.  If _isFinal_ is set to FALSE then only a small number of iterations (5000) are used for all scenarios, except _F = F~MSY~_, which is always run at full (50,000).  If _isFinal_ is set to true, a larger number of iterations (50,000) is used for all scenarios.
+
+Furthermore, in these configurations we set the number of years in which averages of biological data are taken, as well as the period over which recruitment is re-sampled to obtain a median for use in forecasts.  The stock weights at age are not taken from an average, because they are fit to data within the assessment model, this fit is used to predict forward, along with other stock parameters. 
+
+_Note_: We don't use the within assessment year (`r DataYear+1`) estimation of recruitment, as this is derived from only one data point (Q1 surveys).
+
+```{r basicForecastSettings}
+nruns <- ifelse(isFinal, 50000, 5000)
+bioAveYears <- 4
+bay <- bioAveYears-2
+recyears <- 2002:DataYear
+FC <- list()
+```
+
+## Forecast scenarios
+In addition to the basic *F~msy~* scenario, we also provide a range of alternate scenarios to help inform managers of the potential different outcomes, should they base their advice on other assumptions, or should the fishery operate in an unexpected way. These alternate scenarios are as follows:
+
+- Zero Fishing
+- *F~msy~* lower and upper ranges
+- *Status quo*, fishing pressure
+- Precautionary fishing pressure (*F~pa~*)
+- Fishing at *F~lim~*
+- Targetting SSB = *MSY~Btrigger~*^*^
+- Targetting SSB = *B~pa~*^*^
+- Targetting ssb = *B~lim~*^*^
+- Targetting maintaining SSB at the SSB at the start of the advice year (*status quo* SSB)^*^
+- Catches at (or just below) 20% increase
+
+^*^Note that under the current stock conditions (Current fishing pressure, relatively high recruitment), it is not possible for the stock SSB to be fished down to the target SSB of these scenarios by the year `r DataYear+3`.
+
+### Fmsy
+```{r ForecastFmsy, message=FALSE, warning=FALSE}
+set.seed(12345)
+FC[[length(FC)+1]] <- forecast(fit_CURRENT,
+                               fscale=c(1,1,NA,NA),
+                               fval=c(NA,NA,Fmsy,Fmsy),
+                               label="Fmsy",
+                               ave.years=(DataYear-bay):(DataYear+1),
+                               rec.years=recyears,
+                               year.base=DataYear,
+                               splitLD=TRUE,
+                               nosim=50000)
+
+```
+
+### Zero Fishing
+```{r ForecastF0, message=FALSE, warning=FALSE}
+set.seed(12345)
+FC[[length(FC)+1]] <- forecast(fit_CURRENT,
+                               fscale=c(1,1,NA,NA),
+                               fval=c(NA,NA,0.000001,0.000001),
+                               label="F=0",
+                               ave.years=(DataYear-bay):(DataYear+1),
+                               rec.years=recyears,
+                               year.base=DataYear,
+                               splitLD=TRUE,
+                               nosim=nruns)
+```
+
+### Fmsy (lower)
+```{r ForecastFmsyLower, message=FALSE, warning=FALSE}
+set.seed(12345)
+FC[[length(FC)+1]] <- forecast(fit_CURRENT,
+                               fscale=c(1,1,NA,NA),
+                               fval=c(NA,NA,Fmsy_lower,Fmsy_lower),
+                               label="Fmsy (lower)",
+                               ave.years=(DataYear-bay):(DataYear+1),
+                               rec.years=recyears,
+                               year.base=DataYear,
+                               splitLD=TRUE,
+                               nosim=nruns)
+
+```
+
+### Fmsy (upper)
+```{r ForecastFmsyUpper, message=FALSE, warning=FALSE}
+set.seed(12345)
+FC[[length(FC)+1]] <- forecast(fit_CURRENT,
+                               fscale=c(1,1,NA,NA),
+                               fval=c(NA,NA,Fmsy_upper, Fmsy_upper),
+                               label="Fmsy (upper)",
+                               ave.years=(DataYear-bay):(DataYear+1),
+                               rec.years=recyears,
+                               year.base=DataYear,
+                               splitLD=TRUE,
+                               nosim=nruns)
+
+```
+
+### Status Quo Fishing Pressure
+```{r ForecastSQ, message=FALSE, warning=FALSE}
+set.seed(12345)
+FC[[length(FC)+1]] <- forecast(fit=fit_CURRENT,
+                               fscale=c(1,1,1,1),
+                               label=paste0("SQ all years (F=F",DataYear, ")"),
+                               ave.years=(DataYear-bay):(DataYear+1),
+                               rec.years=recyears,
+                               year.base=DataYear,
+                               splitLD=TRUE,
+                               nosim=nruns)  
+
+```
+
+### Precautionary Fishing Pressure (Fpa)
+```{r ForecastFpa, message=FALSE, warning=FALSE}
+set.seed(12345)
+FC[[length(FC)+1]] <- forecast(fit_CURRENT,
+                              fscale=c(1,1,NA,NA),
+                              fval=c(NA,NA,Fpa,Fpa),
+                              label="Fpa=Fp05",
+                              ave.years=(DataYear-bay):(DataYear+1),
+                              rec.years=recyears,
+                              year.base=DataYear,
+                              splitLD=TRUE,
+                              nosim=nruns)
+```
+
+### Fishing at Flim
+```{r ForecastFlim, message=FALSE, warning=FALSE}
+set.seed(12345)
+FC[[length(FC)+1]] <- forecast(fit_CURRENT,
+                               fscale=c(1,1,NA,NA),
+                               fval=c(NA,NA,Flim,Flim),
+                               label="Flim",
+                               ave.years=(DataYear-bay):(DataYear+1),
+                               rec.years=recyears,
+                               year.base=DataYear,
+                               splitLD=TRUE,
+                               nosim=nruns)
+
+```
+
+### Target SSB in two years equal to MSYBtrigger
+```{r ForecastSSB_Btrigger, message=FALSE, warning=FALSE, eval=FALSE}
+set.seed(12345)
+FC[[length(FC)+1]] <- forecast(fit_CURRENT,
+                               fscale=c(1,1,NA,NA),
+                               nextssb=c(NA,NA,MSYBtrigger, MSYBtrigger),
+                               label=paste0("SSB(",DataYear+3,")=MSYBtrigger"),
+                               ave.years=(DataYear-bay):(DataYear+1),
+                               rec.years=recyears,
+                               year.base=DataYear,
+                               nosim=nruns,
+                               splitLD=TRUE)
+
+```
+
+### Target SSB in two years equal to Bpa
+```{r ForecastSSB_Bpa, message=FALSE, warning=FALSE, eval=FALSE}
+set.seed(12345)
+FC[[length(FC)+1]] <- forecast(fit_CURRENT,
+                               fscale=c(1,1,NA,NA),
+                               nextssb=c(NA,NA,Bpa,Bpa),
+                               label=paste0("SSB(",DataYear+3,")=Bpa"),
+                               ave.years=(DataYear-bay):(DataYear+1),
+                               rec.years=recyears,
+                               year.base=DataYear,
+                               nosim=nruns,
+                               splitLD=TRUE)
+```
+
+### Target SSB in two years equal to Blim
+```{r ForecastSSB_Blim, message=FALSE, warning=FALSE, eval=FALSE}
+set.seed(12345)
+FC[[length(FC)+1]] <- forecast(fit_CURRENT,
+                               fscale=c(1,1,NA,NA),
+                               nextssb=c(NA,NA,Blim,Blim),
+                               label=paste0("SSB(",DataYear+3,")=Blim"),
+                               ave.years=(DataYear-bay):(DataYear+1),
+                               rec.years=recyears,
+                               year.base=DataYear,
+                               nosim=nruns,
+                               splitLD=TRUE)
+```
+
+### Target SSB in two years is the same as forecast for advice year
+```{r ForecastSSB_AdviceYear, message=FALSE, warning=FALSE, eval=FALSE}
+set.seed(12345)
+FC[[length(FC)+1]] <- forecast(fit_CURRENT,
+                               fscale=c(1,1,NA,NA),
+                               nextssb=c(NA,NA,
+                                         attr(FC[[1]], "tab")[rownames(attr(FC[[1]], "tab")) == (as.character(as.numeric(DataYear)+2)), "ssb:median"],
+                                         attr(FC[[1]], "tab")[rownames(attr(FC[[1]], "tab")) == (as.character(as.numeric(DataYear)+2)), "ssb:median"]),
+                               label=paste0("SSB(",DataYear+3,")= SSB(", DataYear+2,")"),
+                               ave.years=(DataYear-bay):(DataYear+1),
+                               rec.years=recyears,
+                               year.base=DataYear,
+                               nosim=nruns,
+                               splitLD=TRUE)
+```
+
+### Catch at or below a 20% increase in advice for interim year
+```{r ForecastCatch_20pc, message=FALSE, warning=FALSE}
+set.seed(12345)
+FC[[length(FC)+1]] <- forecast(fit_CURRENT,
+                               fscale=c(1,1,NA,NA),
+                               catchval=c(NA,NA,(LastIcesAdvice*1.2),(LastIcesAdvice*1.2)),
+                               label=paste0("Catch(", DataYear+2, ")<=20% Advice(", DataYear+1, ")"),
+                               ave.years=(DataYear-bay):(DataYear+1),
+                               rec.years=recyears,
+                               year.base=DataYear,
+                               splitLD=TRUE,
+                               nosim=nruns)
+```
+
+```{r Forecasts_aggregate}
+flabels <- c()
+for(i in 1:length(FC)){
+  x <- attributes(FC[[i]])$label
+  flabels <- append(flabels, x)
+}
+
+ForcTable <- as.data.frame(attr(FC[[1]], "tab"))
+ForcTable$Year <- rownames(as.data.frame(attr(FC[[1]], "tab")))
+ForcTable$scenario <- rep(flabels[1], times = nrow(ForcTable))
+
+for(i in 2:length(FC)){
+  tft <- as.data.frame(attr(FC[[i]], "tab"))
+tft$Year <- rownames(as.data.frame(attr(FC[[i]], "tab")))
+tft$scenario <- rep(flabels[i], times = nrow(tft))
+ForcTable <- rbind(ForcTable, tft)
+}
+
+ForcTable <- ForcTable[, c(ncol(ForcTable)-1, ncol(ForcTable), 1:(ncol(ForcTable)-2))]
+rownames(ForcTable) <- NULL
+```
+
+# Short Term Forecast Assumptions
+
+To make these forecasts we had to make some assumptions about what is happening in the intermediate year, `r DataYear+1`. These are defined as:
+
+```{r IntermediateYearAssumptions}
+intyear <- data.frame(Variable = c("F~ages 3-6~",
+                                   paste0("SSB(", (DataYear+2), ")"),
+                                   paste0("R~age 1~ (", (DataYear+1), " & ", (DataYear+2), ")"),
+                                   paste0("Total catch (", (DataYear+1), ")"),
+                                   paste0("Projected Landings (", (DataYear+1), ")"),
+                                   paste0("Projected Discards (", (DataYear+1), ")")),
+                      Value = c(asum_CURRENT[asum_CURRENT$Year == (DataYear),"Fbar"],
+                                ForcTable[ForcTable$Year == (DataYear+2) & ForcTable$scenario == "Fmsy", "ssb:median"],
+                                ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "rec:median"],
+                                ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "catch:median"],
+                                ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Land:median"],
+                                ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Discard:median"]),
+                      Notes = c(paste0("F~ages 3-6~ in ", DataYear, "."),
+                                "Short-term forecast; tonnes.",
+                                paste0("Median resampled from the entire time series of recruitment (excluding latest year with only Q1 data ", (DataYear+1), "); thousands."),
+                                paste0("Short-term forecast using F(", (DataYear+1), "); tonnes."),
+                                paste0("Short-term forecast; assuming average landings ratio by age in ", DataYear-4, "-", DataYear, "; tonnes."),
+                                paste0("Short-term forecast; assuming average discard ratio by age in ", DataYear-4, "-", DataYear, "; tonnes.")
+                      )
+)
+
+kable(intyear,
+      caption = "Assumptions made for the interim year and in the forecast",
+      digits = 3)
+
+# write.csv(intyear, file = paste0("Tables/Ple.27.21-23_ForecastAssumptions_", DataYear+1, ".csv"))
+
+```
+
+# Short Term Forecast Results
+
+The short-term forecasts include the current data-year, the intermediate year (i.e. the assessment year), the advice year (one year in the future), and the furthermost forecast year (three years ahead of the latest full dataset).  The current forecast years are `r paste(DataYear:(DataYear+3), sep = ", ")`.
+
+The full results are too large to present here, but can be generated as a .csv, in the below code chunk.
+
+```{r ForcastTables, eval=TRUE, results='hide'}
+# kable(ForcTable,
+#       caption = "Forecast table for various combined scenarios",
+#       digits = 2)
+
+# write.csv(ForcTable, file = paste0("Tables/Ple.27.21-23_ForecastResults_", DataYear, "-", DataYear+3, "_Assessment", DataYear+1, ".csv"))
+
+ss <- "Fmsy"
+ForcTable$Year <- as.numeric(ForcTable$Year)
+
+```
+
+```{r fig.cap= "Estimated spawning stock biomass for ple.27.21-32 and 95% confidence intervals (tonnes). Purple is the assessment model estimation, while green points are the forecasts, starting from the last full year of data. Reference points MSY B-trigger (orange), Bpa (orange, dotted),  and Blim (darker orange) are the horizontal lines."}
+pssb <- ggplot() +
+  geom_line(data = asum_CURRENT,
+            mapping = aes(x=Year,
+                          y=SSB,
+                          series="Assessment Model Estimates"),
+            colour = ebpal[1]) +
+  geom_ribbon(data = asum_CURRENT,
+              mapping = aes(x=Year,
+                            ymin=SSBlow,
+                            ymax=SSBhigh),
+              fill = ebpal[1],
+              alpha = 0.3) +
+  geom_point(data = ForcTable[ForcTable$scenario == ss, ],
+            mapping = aes(x=Year,
+                          y=`ssb:median`,
+                          series=paste0(ss, " Forecast")),
+            colour = ebpal[2]) +
+  geom_errorbar(data = ForcTable[ForcTable$scenario == ss, ],
+              mapping = aes(x=Year,
+                            ymin=`ssb:low`,
+                            ymax=`ssb:high`,
+                          series=paste0(ss, " Forecast")),
+              colour = ebpal[2],
+              alpha = 0.3) +
+  geom_hline(yintercept = Bpa,
+             colour = ebpal[3],
+             linetype = "dotted",
+             aes(series="Bpa")) +
+  geom_hline(yintercept = MSYBtrigger,
+             colour = ebpal[11],
+             mapping = aes(series="MSY B-trigger")) +
+  geom_hline(yintercept = Blim,
+             colour = ebpal[3],
+             mapping = aes(series="Blim")) +
+  theme_clean()
+
+ggplotly(pssb, tooltip = c("series", "x", "y"))
+```
+```{r fig.cap= "Estimated fishing pressure for ages 3-6 for ple.27.21-32 and 95% confidence intervals. Purple is the assessment model estimation, while green points are the forecasts, starting from the last full year of data. Reference points Fmsy (orange), Fpa (orange, dotted), and Flim (darker orange) are the horizontal lines."}
+pfbar <- ggplot() +
+  geom_line(data = asum_CURRENT,
+            mapping = aes(x=Year,
+                          y=Fbar,
+                          series="Assessment Model Estimates"),
+            colour = ebpal[1]) +
+  geom_ribbon(data = asum_CURRENT,
+              mapping = aes(x=Year,
+                            ymin=Flow,
+                            ymax=Fhigh),
+              fill = ebpal[1],
+              alpha = 0.3) +
+  geom_point(data = ForcTable[ForcTable$scenario == ss, ],
+            mapping = aes(x=Year,
+                          y=`fbar:median`,
+                          series=paste0(ss, " Forecast")),
+            colour = ebpal[2]) +
+  geom_errorbar(data = ForcTable[ForcTable$scenario == ss, ],
+              mapping = aes(x=Year,
+                            ymin=`fbar:low`,
+                            ymax=`fbar:high`,
+                          series=paste0(ss, " Forecast")),
+              colour = ebpal[2],
+              alpha = 0.3) +
+  geom_hline(yintercept = Fpa,
+             colour = ebpal[3],
+             linetype = "dotted",
+             aes(series="Fpa")) +
+  geom_hline(yintercept = Fmsy,
+             colour = ebpal[11],
+             aes(series="Fmsy")) +
+  geom_hline(yintercept = Flim,
+             colour = ebpal[3],
+             aes(series="Flim")) +
+  theme_clean()
+
+ggplotly(pfbar, tooltip = c("series", "x", "y"))
+```
+```{r fig.cap= "Estimated recruitment for ple.27.21-32 and 95% confidence intervals (individuals). Purple is the assessment model estimation, while green points are the forecasts, starting from the last full year of data."}
+prec <- ggplot() +
+  geom_line(data = asum_CURRENT,
+            mapping = aes(x=Year,
+                          y=R_age1,
+                          series="Assessment Model Estimates"),
+            colour = ebpal[1]) +
+  geom_ribbon(data = asum_CURRENT,
+              mapping = aes(x=Year,
+                            ymin=Rlow,
+                            ymax=Rhigh),
+              fill = ebpal[1],
+              alpha = 0.3) +
+  geom_point(data = ForcTable[ForcTable$scenario == ss, ],
+            mapping = aes(x=Year,
+                          y=`rec:median`,
+                          series=paste0(ss, " Forecast")),
+            colour = ebpal[2]) +
+  geom_errorbar(data = ForcTable[ForcTable$scenario == ss, ],
+              mapping = aes(x=Year,
+                            ymin=`rec:low`,
+                            ymax=`rec:high`,
+                          series=paste0(ss, " Forecast")),
+              colour = ebpal[2],
+              alpha = 0.3) +
+  theme_clean()
+
+ggplotly(prec, tooltip = c("series", "x", "y"))
+```
+```{r fig.cap= "Catches for ple.27.21-32 and 95% confidence intervals (tonnes). Purple is the assessment model estimation, while green points are the forecasts, starting from the last full year of data. Orange points are the observations."}
+pcatch <- ggplot() +
+  geom_line(data = asum_CURRENT[asum_CURRENT$Year != (DataYear+1), ],
+            mapping = aes(x=Year,
+                          y=CatchEst,
+                          series="Assessment Model Estimates"),
+            colour = ebpal[1]) +
+  geom_ribbon(data = asum_CURRENT[asum_CURRENT$Year != (DataYear+1), ],
+              mapping = aes(x=Year,
+                            ymin=Catchlow,
+                            ymax=Catchhigh),
+              fill = ebpal[1],
+              alpha = 0.3) +
+  geom_point(data = ForcTable[ForcTable$scenario == ss, ],
+            mapping = aes(x=Year,
+                          y=`catch:median`,
+                          series=paste0(ss, " Forecast")),
+            colour = ebpal[2]) +
+  geom_errorbar(data = ForcTable[ForcTable$scenario == ss, ],
+              mapping = aes(x=Year,
+                            ymin=`catch:low`,
+                            ymax=`catch:high`,
+                          series=paste0(ss, " Forecast")),
+              colour = ebpal[2],
+              alpha = 0.3) +
+  geom_point(data = asum_CURRENT[asum_CURRENT$Year != (DataYear+1), ],
+             mapping = aes(x=Year,
+                           y=CatchObs,
+                           series="Observed Catches"),
+             shape = 3,
+             colour = ebpal[3],
+             fill = ebpal[3]) +
+  theme_clean()
+
+ggplotly(pcatch, tooltip = c("series", "x", "y"))
+```
+
+# Catch Options
+
+Based on these scenarios, we can extract the relevant information to provide to managers as advice for setting TACs under various management regimes or contexts. 
+
+```{r CatchOptionsTable}
+cotable <- data.frame( a = character(),
+                       b = integer(),
+                       c = numeric(),
+                       d = integer(),
+                       e = numeric(),
+                       f = numeric())
+
+for(i in unique(ForcTable$scenario)){
+  a <- ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "scenario"]
+  b <- ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "catch:median"]
+  c <- ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "fbar:median"]
+  d <- ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+3), "ssb:median"]
+  e <- (ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+3), "ssb:median"] - ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "ssb:median"])/ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "ssb:median"]
+  f <- (ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "catch:median"] - LastIcesAdvice)/LastIcesAdvice
+  
+  cotable <- rbind(cotable, data.frame(a, b, c, d, e, f))
+}
+
+colnames(cotable) <- c("Basis",
+                       paste0("TotalCatch_",(DataYear+2)),
+                       paste0("F_", (DataYear+2)),
+                       paste0("SSB_", (DataYear+3)),
+                       paste0("%SSB_change_", (DataYear+3), "_cf_", (DataYear+2)),
+                       paste0("%ChangeAdvice_", (DataYear+2), "_cf_", (DataYear+1)))
+
+cotable[,2] <- round(cotable[,2])
+cotable[,3] <- icesRound(cotable[,3])
+cotable[,4] <- round(cotable[,4])
+cotable[,5] <- icesRound(cotable[,5]*100, percent = TRUE, sign = FALSE)
+cotable[,6] <- icesRound(cotable[,6]*100, percent = TRUE, sign = FALSE)
+
+kable(cotable,
+      caption = "Catch Options Table formatted for advice sheet (ICES rounding rules applied)",
+      col.names = gsub(x = colnames(cotable), pattern = "_", replacement = " "))
+
+# write.csv(cotable, file = paste0("Tables/Ple.27.21-23_CatchOptionsTable_", DataYear+1, ".csv"))
+
+```
+
+
+
+
