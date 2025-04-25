@@ -118,9 +118,10 @@ figPath <- paste0("Figures/")
 ```
 
 # Selected Assessment Model
-The model selected for creating forecasts and advice, this year, is called [ple.27.21.32_WGBFAS_CURRENT](https://stockassessment.org/setStock.php?stock=ple.27.21.32_WGBFAS_CURRENT) and is available from [stockassessment.org](https://stockassessment.org).
+The model selected for creating forecasts and advice, this year, is called [ple.27.21.32_WGBFAS_2025_SA](https://stockassessment.org/setStock.php?stock=ple.27.21.32_WGBFAS_2025_SA) and is available from [stockassessment.org](https://stockassessment.org).
 
 ```{r 2025_SAFitFromWeb}
+set.seed(12345)
 fit_CURRENT <- fitfromweb("ple.27.21.32_WGBFAS_2025_SA")
 ```
 
@@ -138,6 +139,27 @@ asum_CURRENT <- merge(x = asum_CURRENT, y = ct_CURRENT, by = "Year")
 colnames(asum_CURRENT) <- c("Year", "R_age1", "Rlow", "Rhigh", "SSB", "SSBlow", "SSBhigh", "Fbar", "Flow", "Fhigh", "CatchEst", "Catchlow", "Catchhigh", "CatchObs")
 #=====
 ```
+
+```{r survivingDiscardRates}
+# Import discard survival rates ---- 
+survfrac <- read.csv("DataIn/CatchData/ple.27.21-32_DiscardSurvivalRates_2002_DataYear.csv")
+survfrac <- as.matrix(survfrac[, 2:ncol(survfrac)])
+rownames(survfrac) <- 2002:DataYear
+colnames(survfrac) <- 1:10
+
+# Cutdown ages of input data to 7+ group ----
+catch.no<-read.ices("Assessment Input/StockAnnex/cn_medium.dat")/1000
+cutage<-7
+low<-1
+GE<-which(as.numeric(colnames(catch.no))>=cutage)
+E<-which(as.numeric(colnames(catch.no))==cutage)
+w<-catch.no[,GE]/rowSums(catch.no[,GE])
+wex<-rbind(w,w[nrow(w),])
+
+survfrac[,E]<-rowSums(survfrac[,GE]*w)
+survfrac<-survfrac[,low:E]
+```
+
 
 # Short Term Forecast Scenarios
 ## Forecast configurations
@@ -174,7 +196,7 @@ In addition to the basic *F~msy~* scenario, we also provide a range of alternate
 ^*^Note that under the current stock conditions (Current fishing pressure, relatively high recruitment), it is not possible for the stock SSB to be fished down to the target SSB of these scenarios by the year `r DataYear+3`.
 
 ### Fmsy
-```{r ForecastFmsy, message=FALSE, warning=FALSE}
+```{r ForecastFmsy, message=FALSE, warning=FALSE, results="hide"}
 set.seed(12345)
 FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                fscale=c(1,1,NA,NA),
@@ -189,7 +211,7 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
 ```
 
 ### Zero Fishing
-```{r ForecastF0, message=FALSE, warning=FALSE}
+```{r ForecastF0, message=FALSE, warning=FALSE, results="hide"}
 set.seed(12345)
 FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                fscale=c(1,1,NA,NA),
@@ -203,7 +225,7 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
 ```
 
 ### Fmsy (lower)
-```{r ForecastFmsyLower, message=FALSE, warning=FALSE}
+```{r ForecastFmsyLower, message=FALSE, warning=FALSE, results="hide"}
 set.seed(12345)
 FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                fscale=c(1,1,NA,NA),
@@ -218,7 +240,7 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
 ```
 
 ### Fmsy (upper)
-```{r ForecastFmsyUpper, message=FALSE, warning=FALSE}
+```{r ForecastFmsyUpper, message=FALSE, warning=FALSE, results="hide"}
 set.seed(12345)
 FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                fscale=c(1,1,NA,NA),
@@ -233,7 +255,7 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
 ```
 
 ### Status Quo Fishing Pressure
-```{r ForecastSQ, message=FALSE, warning=FALSE}
+```{r ForecastSQ, message=FALSE, warning=FALSE, results="hide"}
 set.seed(12345)
 FC[[length(FC)+1]] <- forecast(fit=fit_CURRENT,
                                fscale=c(1,1,1,1),
@@ -247,7 +269,7 @@ FC[[length(FC)+1]] <- forecast(fit=fit_CURRENT,
 ```
 
 ### Precautionary Fishing Pressure (Fpa)
-```{r ForecastFpa, message=FALSE, warning=FALSE}
+```{r ForecastFpa, message=FALSE, warning=FALSE, results="hide"}
 set.seed(12345)
 FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                               fscale=c(1,1,NA,NA),
@@ -261,7 +283,7 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
 ```
 
 ### Fishing at Flim
-```{r ForecastFlim, message=FALSE, warning=FALSE}
+```{r ForecastFlim, message=FALSE, warning=FALSE, results="hide"}
 set.seed(12345)
 FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                fscale=c(1,1,NA,NA),
@@ -276,7 +298,7 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
 ```
 
 ### Target SSB in two years equal to MSYBtrigger
-```{r ForecastSSB_Btrigger, message=FALSE, warning=FALSE, eval=FALSE}
+```{r ForecastSSB_Btrigger, message=FALSE, warning=FALSE, results="hide", eval=FALSE}
 set.seed(12345)
 FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                fscale=c(1,1,NA,NA),
@@ -291,7 +313,7 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
 ```
 
 ### Target SSB in two years equal to Bpa
-```{r ForecastSSB_Bpa, message=FALSE, warning=FALSE, eval=FALSE}
+```{r ForecastSSB_Bpa, message=FALSE, warning=FALSE, results="hide", eval=FALSE}
 set.seed(12345)
 FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                fscale=c(1,1,NA,NA),
@@ -305,7 +327,7 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
 ```
 
 ### Target SSB in two years equal to Blim
-```{r ForecastSSB_Blim, message=FALSE, warning=FALSE, eval=FALSE}
+```{r ForecastSSB_Blim, message=FALSE, warning=FALSE, results="hide", eval=FALSE}
 set.seed(12345)
 FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                fscale=c(1,1,NA,NA),
@@ -319,7 +341,7 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
 ```
 
 ### Target SSB in two years is the same as forecast for advice year
-```{r ForecastSSB_AdviceYear, message=FALSE, warning=FALSE, eval=FALSE}
+```{r ForecastSSB_AdviceYear, message=FALSE, warning=FALSE, results="hide", eval=FALSE}
 set.seed(12345)
 FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                fscale=c(1,1,NA,NA),
@@ -335,7 +357,7 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
 ```
 
 ### Catch at or below a 20% increase in advice for interim year
-```{r ForecastCatch_20pc, message=FALSE, warning=FALSE}
+```{r ForecastCatch_20pc, message=FALSE, warning=FALSE, results="hide"}
 set.seed(12345)
 FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                fscale=c(1,1,NA,NA),
@@ -380,19 +402,22 @@ intyear <- data.frame(Variable = c("F~ages 3-6~",
                                    paste0("R~age 1~ (", (DataYear+1), " & ", (DataYear+2), ")"),
                                    paste0("Total catch (", (DataYear+1), ")"),
                                    paste0("Projected Landings (", (DataYear+1), ")"),
-                                   paste0("Projected Discards (", (DataYear+1), ")")),
+                                   paste0("Projected Discards (", (DataYear+1), ")"),
+                                   paste0("Survival Rate of Discards (", (DataYear+1), ")")),
                       Value = c(asum_CURRENT[asum_CURRENT$Year == (DataYear),"Fbar"],
                                 ForcTable[ForcTable$Year == (DataYear+2) & ForcTable$scenario == "Fmsy", "ssb:median"],
                                 ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "rec:median"],
                                 ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "catch:median"],
                                 ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Land:median"],
-                                ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Discard:median"]),
+                                ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Discard:median"],
+                                paste(round(unname(survfrac[nrow(survfrac), ]), 2), collapse=", ")),
                       Notes = c(paste0("F~ages 3-6~ in ", DataYear, "."),
                                 "Short-term forecast; tonnes.",
                                 paste0("Median resampled from the entire time series of recruitment (excluding latest year with only Q1 data ", (DataYear+1), "); thousands."),
                                 paste0("Short-term forecast using F(", (DataYear+1), "); tonnes."),
                                 paste0("Short-term forecast; assuming average landings ratio by age in ", DataYear-4, "-", DataYear, "; tonnes."),
-                                paste0("Short-term forecast; assuming average discard ratio by age in ", DataYear-4, "-", DataYear, "; tonnes.")
+                                paste0("Short-term forecast; assuming average discard ratio by age in ", DataYear-4, "-", DataYear, "; tonnes."),
+                                paste0("Survival rates in discards, by age (1-7), in ", DataYear, ".")
                       )
 )
 
@@ -401,6 +426,27 @@ kable(intyear,
       digits = 3)
 
 # write.csv(intyear, file = paste0("Tables/Ple.27.21-23_ForecastAssumptions_", DataYear+1, ".csv"))
+
+```
+
+# Raising Forecasts by Surviving Discards
+
+In our assessment procedure, we utilise published survival rates of discarded fish across various gears, seasons (Quarters), and management regions to estimate annual proportions of discarded fish that would survive. This fraction of "surviving discards", are removed from the catch data that is put into the assessment (e.g. canum.dat and lf.dat).
+
+The assessment model is then run with only landings and "dead discards", contributing to total catch.  Thus the forecasts made above, also only include landings and "dead discards".  To re-introduce the surviving component of the catch, we assume that the annual proportion of surviving discards by age remains _status quo_, that is the forecast advice year  (`r DataYear+2`) has the same ratios of surviving discards as the input data year (`r DataYear`).
+
+```{r forecastSurvivors, eval=FALSE}
+ForcTable$`survCatch:median` <- ForcTable$`catch:median`/(1-survfrac)
+
+for(i in 2:length(FC)){
+  ## Extract relevant catch forecasts by age
+  caatF <- as.data.frame(attr(FC[[i]], "caytable"))
+  ## Dead discards forecast by age
+  ddaaF <- caatF*unname((1-fit_CURRENT$data$landFrac[, , "Residual catch"])[nrow(fit_CURRENT$data$landFrac[, , "Residual catch"]), ])
+tft$Year <- rownames(as.data.frame(attr(FC[[i]], "tab")))
+tft$scenario <- rep(flabels[i], times = nrow(tft))
+ForcTable <- rbind(ForcTable, tft)
+}
 
 ```
 

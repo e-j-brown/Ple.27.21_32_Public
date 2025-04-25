@@ -508,7 +508,36 @@ kable(aggregate(CATON ~ Area+Fleet2,
       digits = 2) 
 ```
 
-```{r fig.cap="Commercial catch by catch category for all areas and all countries (tonnes).", fig.height=unit(25,"cm")}
+```{r fig.cap="Commercial catch by catch category aggregated to the stock level (tonnes)."}
+#===
+# Figure Catch by catch category (all areas, all countries)
+#====
+IC_agg_temp <- aggregate(CATON~Year+CatchCategory,
+                         data = ic_clean[!ic_clean$CatchCategory %in% c("BMS", "BMS landing","Logbook Registered Discard", "Catch"),],
+                         FUN = sum)
+
+plt_stockCatch <- ggplot() +
+  stat_summary(fun.y = sum,
+               geom = "area",
+               position = "stack",
+               na.rm = TRUE,
+               data = IC_agg_temp,
+               mapping = aes(x = Year,
+                             y = CATON,
+                             group = CatchCategory,
+                             fill = CatchCategory)) +
+  ylab("Catch (Tons)") + 
+  theme_clean() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        strip.text = element_text(face = "bold", size = rel(0.75)),
+        strip.background = element_blank())+
+  scale_fill_manual(values = c("#1b9e77","#d95f02", "#7570b3", "grey")) +
+  ylab("Catch (t)")
+style(ggplotly(plt_stockCatch), showlegend = FALSE)
+#====
+```
+
+```{r fig.cap="Commercial catch by catch category for all areas and all countries (tonnes).", fig.height=10}
 #===
 # Figure Catch by catch category (all areas, all countries)
 #====
@@ -771,7 +800,7 @@ ggplotly(plt_disrat_country)
 ```
 
 Drilling down into a bit more detail we can see where (subdivision), when (quarter) and by which general gear types the majority of catches (discards & landings) are taken. 
-```{r fig.cap= "Discards and landings from Current year by quarter and gear", fig.height=unit(15,"cm")}
+```{r fig.cap= "Discards and landings from Current year by quarter and gear", fig.height=12}
 #===
 # Figure Discards/landings of DataYear by quarter and gear
 #====
@@ -1057,7 +1086,7 @@ datacoverage_DY <- droplevels(datacoverage_DY)
 
 ```
 
-```{r fig.cap= paste0("Proportions of catch components that were sampled for biological data, and the proportion of discards that were raised by pairing with reported discard data.  Proportions are made with catch tonnage by strata (fleet, area, country, quarter) for the year ", DataYear) }
+```{r fig.cap= paste0("Proportions of catch components that were sampled for biological data, and the proportion of discards that were raised by pairing with reported discard data.  Proportions are made with catch tonnage by strata (fleet, area, country, quarter) for the year ", DataYear), fig.height=8}
 
 #===
 # Figure of sampling coverage for DataYear
@@ -3217,7 +3246,7 @@ swaa2 <- reshape(swaal2[, c("year", "Age", "smoothMeanWeights")],
 for(i in 1:ncol(swaa2)){
   for(j in 1:nrow(swaa2)){
     swaa2[j, i] <- ifelse(is.na(swaa2[j, i]), median(c(swaa2[,i]), na.rm = T), swaa2[j, i])
-    swaa2[j, i] <- ifelse((swaa2[j, i]>1), 1, swaa2[j, i])
+    # swaa2[j, i] <- ifelse((swaa2[j, i]>1), 1, swaa2[j, i])
   }
 }
 
@@ -4102,7 +4131,7 @@ survcohorts$Year <- as.factor(as.character(survcohorts$Year))
 k <- append(k, c("survcohorts"))
 ```
 
-```{r fig.cap= "Bubble plot showing numbers (size of bubble) at age (y-axis), over time (x-axis) estimated from surveys.  The dotted lines show the progression of co-horts where large and small numbers at age can be tracked year to year."}
+```{r fig.cap= "Bubble plot showing numbers (size of bubble) at age (y-axis), over time (x-axis) estimated from surveys.  The dotted lines show the progression of co-horts where large and small numbers at age can be tracked year to year.", fig.height=18}
 #===
 # Data Prep
 #====
@@ -4112,6 +4141,9 @@ survcohortsLng <- reshape(data = survcohorts,
                            timevar = "Cohort",
                            direction = "long")
 survcohortsLng$Year <- as.numeric(as.character(survcohortsLng$Year))
+
+survTunLng$Year <- as.numeric(as.character(survTunLng$Year))
+survTunLng$Age <- as.numeric(as.character(survTunLng$Age))
 #=====
 
 #===
@@ -4127,7 +4159,8 @@ plt_survCohorts <- ggplot() +
                           y = Age,
                           group = Cohort),
             linetype = "dotted") +
-  theme_classic() +
+  theme_clean() +
+  coord_cartesian(xlim = c(1999,DataYear)) +
   facet_grid(rows = vars(Survey)) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 

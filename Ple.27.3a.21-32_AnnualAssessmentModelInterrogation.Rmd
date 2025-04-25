@@ -119,10 +119,11 @@ figPath <- paste0("Figures/")
 
 # Baseline
 
-The baseline model we're using to comare this year's model against, is the final model from last year's Benchmark workshop, using catch data up until 2023 and survey data up to Q1 2025. This baseline model is called [ple.27.21-32_BASELAICE_2024_nmG5Fb_mo1_dsmed6](https://stockassessment.org/setStock.php?stock=ple.27.21-32_BASELAICE_2024_nmG5Fb_mo1_dsmed6) and can be found on [stockassessment.org](https://stockassessment.org).
+The baseline model we're using to comare this year's model against, is the final model from last year's Benchmark workshop, using catch data up until 2023 and survey data up to Q1 2025. This baseline model is called [ple.27.21-32_WKBPLAICE_2024_nmG5Fb_mo1_dsmed6]https://stockassessment.org/setStock.php?stock=ple.27.21-32_WKBPLAICE_2024_nmG5Fb_mo1_dsmed6) and can be found on [stockassessment.org](https://stockassessment.org).
 
 ```{r BASEFitFromWeb}
-fit_BASE <- fitfromweb("ple.27.21-32_BASELAICE_2024_nmG5Fb_mo1_dsmed6")
+set.seed(12345)
+fit_BASE <- fitfromweb("ple.27.21-32_WKBPLAICE_2024_nmG5Fb_mo1_dsmed6")
 ```
 
 ```{r dataframeSummary_BASE, results='hide', fig.show='hide'}
@@ -147,6 +148,7 @@ colnames(asum_BASE) <- c("Year", "R_age1", "Rlow", "Rhigh", "SSB", "SSBlow", "SS
 This year's assessment model is based on the new Stock Annex procedure from the 2024 Benchmark workshop. This model is also available from [stockassessment.org](https://stockassessment.org), and is called [ple.27.21.32_WGBFAS_CURRENT](https://stockassessment.org/setStock.php?stock=ple.27.21.32_WGBFAS_CURRENT).
 
 ```{r 2025_SAFitFromWeb}
+set.seed(12345)
 fit_CURRENT <- fitfromweb("ple.27.21.32_WGBFAS_2025_SA")
 ```
 
@@ -287,6 +289,7 @@ sdplot(fit_CURRENT, marg = c(5,4,1,1))
 
 ## Residuals
 ```{r calculateResiduals_CURRENT, warning=FALSE, results='hide'}
+set.seed(12345)
 resid_CURRENT <- residuals(fit_CURRENT)
 resid_CURRENT_df <- data.frame(year = resid_CURRENT$year,
                                         fleet = resid_CURRENT$fleet,
@@ -333,6 +336,7 @@ ggplotly(ggplot(resid_CURRENT_df) +
 ## Jittering
 We can also test to see if the model is converging on some local minimum (i.e. it's fitting to some solution close to initialising values that represents noise and not the global solution, that is the proper solution).  To do this, we add random noise to the initial parameter values to see if the model will converge on a different minimum in it's data-space. The easiest way to investigate this is to see if the model fits vary alot depending on the starting values:
 ```{r Jitter_CURRENT}
+set.seed(12345)
 jit_CURRENT <- jit(fit = fit_CURRENT)
 
 mt <- as.data.frame(modeltable(jit_CURRENT))
@@ -515,12 +519,15 @@ ggplotly(pcat, tooltip = c("series", "x", "y"))
 ```
 
 # Model Performance and Sensitivities
+Now that we've interrogated the model's fit and interpreted its results, we should also see how dependent these results are on the input data. In the leave-one-out  and the retrospective analyses, we remove different tuning fleets and recent data, to see how robust the model's estimations are to the current context.
+
 ## Leave-One-Out Analyses
 A leave-one-out analysis is a form of sensitivity analysis, showing the impact the data from each tuning fleet has on the estimation of the key variables being estimated; namely SSB, F and recruitment.  
 
 First we must run the leave-one-out analysis which refits the model in two iterations, removing one survey at a time. Then we can plot each of these new model fits over the full model to see the impact the removal of each has. 
 
 ```{r LeaveOneOut_CURRENT}
+set.seed(12345)
 LO_CURRENT <- leaveout(fit_CURRENT)
 
 #=== 
@@ -629,12 +636,20 @@ loca_CURRENT <- ggplotly(ggplot() +
 layout(subplot(lossb_CURRENT, lof_CURRENT, lorec_CURRENT, loca_CURRENT, nrows = 2, shareX = TRUE, titleY = TRUE), showlegend=FALSE)
 ```
 
-### Retrospectives
+## Retrospectives
+Retrospective analyses, iterate through removing the most recent years of data and refiting the model.  The results illustrate how much the current data is impacting upon how we view the past status of the stock. We do this for 5 iterations ( _peels_), removing up to five years of data.
+
+The mohn's rho is a relative error statistic used to describe the difference between an estimate ( _SSB_, _F_, etc.) with a full time series compared to the truncated series.  Generally, in ICES assessments, Mohn's rhos below 0.2 and above -0.15 are generally acceptable.  
+
+In the case of this stock, our assessment model is fit to Q1 `r DataYear+1` survey data, and so it makes estimates right up to the assessment year.  However, these estimates of stock size and attributes in the assessment year lack the input of the commercial catch data and the second tuning fleet. Therefore, before starting the retrospective analyses, we remove the `r DataYear+1` estimates and begin the five peels from `r DataYear`.
+
 ```{r calculateRetros_CURRENT}
+set.seed(12345)
 RETRO_CURRENT<-retro(fit_CURRENT, year=5)
+set.seed(12345)
 rho_CURRENT <- mohn(RETRO_CURRENT, lag = 1)
 
-## Make RETROs in better plotting format
+## Make RETROs in better plotting format and remove latest year with only one datapoint.
 ret_CURRENT_df <- asum_CURRENT[asum_CURRENT$Year != max(asum_CURRENT$Year), ]
 
 for(i in 1:length(RETRO_CURRENT)){
@@ -745,6 +760,161 @@ ret_fp <- style(subplot(retssb_CURRENT, retf_CURRENT, retrec_CURRENT, retca_CURR
 
 layout(ret_fp, legend = list(orientation = 'h', x = 0.5, xanchor = 'center', y = -0.05, yanchor = 'top', borderwidth = 0))
 ```
+
+# Catch Estimates With Surviving Discards
+
+In our assessment procedure, we utilise published survival rates of discarded fish across various gears, seasons (Quarters), and management regions to estimate annual proportions of discarded fish that would survive. This fraction of "surviving discards", are removed from the catch data that is put into the assessment (e.g. canum.dat and lf.dat).
+
+The assessment model is then run with only landings and "dead discards", contributing to total catch.  Thus the forecasts made above, also only include landings and "dead discards".  To re-introduce the surviving component of the catch, we assume that the annual proportion of surviving discards by age remains _status quo_, that is the forecast advice year  (`r DataYear+2`) has the same ratios of surviving discards as the input data year (`r DataYear`).
+
+```{r catchEstSurviving, eval=FALSE}
+# Surviving fractions of discards ----
+survfrac <- read.csv("DataIn/CatchData/ple.27.21-32_DiscardSurvivalRates_2002_DataYear.csv")
+survfrac <- as.matrix(survfrac[, 2:ncol(survfrac)])
+rownames(survfrac) <- 2002:DataYear
+colnames(survfrac) <- 1:10
+
+# Cutdown ages of input data to 7+ group ----
+catch.no<-read.ices("Assessment Input/StockAnnex/cn_medium.dat")/1000
+cutage<-7
+low<-1
+GE<-which(as.numeric(colnames(catch.no))>=cutage)
+E<-which(as.numeric(colnames(catch.no))==cutage)
+w<-catch.no[,GE]/rowSums(catch.no[,GE])
+wex<-rbind(w,w[nrow(w),])
+
+survfrac[,E]<-rowSums(survfrac[,GE]*w)
+survfrac<-survfrac[,low:E]
+
+# # Extract stock numbers at age from model
+# sn_CURRENT <- ntable(fit_CURRENT)[!rownames(sn_CURRENT) %in% (DataYear+1), ]
+
+# Get estimated Dead catch numbers at age from model ----
+## Landings and DEAD Discards combined
+dcn_CURRENT <- caytable(fit_CURRENT)[!rownames(caytable(fit_CURRENT)) %in% (DataYear+1), ]
+## DEAD discard numbers at age from model
+ddcn_CURRENT <- dcn_CURRENT*(1-fit_CURRENT$data$landFrac[, , "Residual catch"])
+## TOTAL discard numbers at age
+adcn_CURRENT <- ddcn_CURRENT/(1-survfrac)
+## SURVIVING discard numbers at age
+sdcn_CURRENT <- adcn_CURRENT*survfrac
+
+# Add SURVIVING discards back to DEAD catch numbers at age from the model
+cn_CURRENT <- dcn_CURRENT+sdcn_CURRENT
+
+# Calculate catches (tonnes) by age using mean weights over time
+## Dead discards
+ddcaton_CURRENT <- ddcn_CURRENT*fit_CURRENT$data$disMeanWeight[, , "Residual catch"]
+## All Discards
+adcaton_CURRENT <- adcn_CURRENT*fit_CURRENT$data$disMeanWeight[, , "Residual catch"]
+## Landings only
+lcaton_CURRENT <- (dcn_CURRENT-ddcn_CURRENT)*fit_CURRENT$data$landMeanWeight[, , "Residual catch"]
+## Totals with only DEAD discards
+dtcaton_CURRENT <- ddcaton_CURRENT+lcaton_CURRENT
+## Totals with ALL Discards
+caton_CURRENT <- adcaton_CURRENT+lcaton_CURRENT
+caton_CURRENT_Check <- cn_CURRENT*fit_CURRENT$data$catchMeanWeight[, , "Residual catch"]
+
+newnums <- rbind(dcn_CURRENT[nrow(dcn_CURRENT), ],
+      ddcn_CURRENT[nrow(ddcn_CURRENT), ],
+      adcn_CURRENT[nrow(adcn_CURRENT), ],
+      sdcn_CURRENT[nrow(sdcn_CURRENT), ],
+      cn_CURRENT[nrow(cn_CURRENT), ],
+      # rep(" - ", times=ncol(dcn_CURRENT)),
+      ddcaton_CURRENT[nrow(ddcaton_CURRENT), ],
+      adcaton_CURRENT[nrow(adcaton_CURRENT), ],
+      lcaton_CURRENT[nrow(lcaton_CURRENT), ],
+      dtcaton_CURRENT[nrow(dtcaton_CURRENT), ],
+      caton_CURRENT[nrow(caton_CURRENT), ],
+      caton_CURRENT_Check[nrow(caton_CURRENT_Check), ])
+newnums <- round(newnums, 3)
+rownames(newnums) <- c("CatchAgeTable", "DeadDiscards", "AllDiscards", "SurvivingDiscards", "TotalCatchNo", "DeadDiscardCATONDW", "AllDiscardCATONDW", "LandingsCATONLW", "TotalDeadCATONDwLw", "TotalCATONDwLw", "TotalCATONCw")
+
+# Check totals align with catchTable
+## Extract estimates from catchTable
+fit_summary <- catchtable(fit_CURRENT)
+
+## Total DEAD catch mass, all ages summed, from calcs using discards and landings independently
+dlCatchEst <- rowSums(dtcaton_CURRENT)
+## Total DEAD & SURVIVING catch mass, all ages summed, from calcs using discards and landings independently
+sdlCatchEst <- rowSums(caton_CURRENT)
+
+## Total catch mass, all ages summed, from cayTable*cw
+CatchEst <- rowSums(dcn_CURRENT*fit_CURRENT$data$catchMeanWeight[, , "Residual catch"])
+
+
+## totals calculated from total catch, from cayTable*cw
+data.frame(ManualCalcs=CatchEst, CatchTableVals=fit_summary[, "Estimate"], Difference=CatchEst-fit_summary[, "Estimate"])
+
+## totals from independent discard and landings calculations
+data.frame(ManualCalcs=dlCatchEst, CatchTableVals=fit_summary[, "Estimate"], Difference=dlCatchEst-fit_summary[, "Estimate"])
+
+## totals with re-added surviving discards
+data.frame(ManualCalcs=sdlCatchEst, CatchTableVals=fit_summary[, "Estimate"], Difference=sdlCatchEst-fit_summary[, "Estimate"], survivingDiscards=rowSums(sdcn_CURRENT*fit_CURRENT$data$disMeanWeight[, , "Residual catch"]))
+
+# Create new ASUM with surviors added back ----
+## Initialise new ASUM
+asum_Survivors <- asum_CURRENT[asum_CURRENT$Year != (DataYear+1), ]
+asum_Survivors$CatchSurv <- unname(sdlCatchEst)
+
+## Pull in and clean full catch data
+catch.no<-read.ices('Assessment Input/AlternateModel_NoDiscardSurvival/cn.dat')/1000
+catch.mean.weight<-read.ices('Assessment Input/AlternateModel_NoDiscardSurvival/cw.dat')
+
+catch.no[,E]<-rowSums(catch.no[,GE])
+catch.no<-catch.no[,low:E]
+catch.mean.weight[,E]<-rowSums(catch.mean.weight[,GE]*w)
+catch.mean.weight<-catch.mean.weight[,low:E]
+
+CatchData_NoSurvivals <- catch.no*catch.mean.weight
+
+## Add total catch observations back to new ASUM
+asum_Survivors$CatchObsSurv <- rowSums(CatchData_NoSurvivals)
+
+```
+
+```{r fig.cap= "Annual catch estimates and 95% confidence intervals (line and shaded area, respectively) for ple.27.21-32 and point annual observations (points).  Purple is the baseline model, while green is the outcome of the current stock annex procedure with the latest data, and orange are the observations."}
+pcat <- ggplot() +
+  geom_line(data = asum_Survivors,
+            mapping = aes(x=Year,
+                          y=CatchSurv,
+                          series="Estimated Catch with Surviving Discards"),
+            colour = ebpal[8],
+            size = 1) +
+  geom_point(asum_Survivors,
+             mapping = aes(x=Year,
+                           y=CatchObsSurv,
+                           series="Observed Catches with Surviving Discards"),
+             shape = 16,
+             colour = ebpal[10],
+             fill = ebpal[10]) +
+  geom_line(data = asum_Survivors,
+            mapping = aes(x=Year,
+                          y=CatchEst,
+                          series="Model Estimated Dead Catches"),
+            colour = ebpal[2]) +
+  geom_ribbon(data = asum_Survivors,
+              mapping = aes(x=Year,
+                            ymin=Catchlow,
+                            ymax=Catchhigh,
+                            series="Model Estimated Dead Catches"),
+              fill = ebpal[2],
+              alpha = 0.3) +
+  geom_point(asum_Survivors,
+             mapping = aes(x=Year,
+                           y=CatchObs,
+                           series="Observed Catches NO Surviving Discards"),
+             shape = 3,
+             colour = ebpal[3],
+             fill = ebpal[3]) +
+  theme_clean()
+
+ggplotly(pcat, tooltip = c("series", "x", "y"))
+```
+
+
+
+
 
 
 
