@@ -2,10 +2,10 @@ library(dplyr)
 library(tidyr)
 
 # ==== 1. read in the clean IC file ====
-ple_data <- read.csv("ple_data.csv")
+ple_data <- read.csv("ple_data.csv") 
 
-ple_data %>%
-filter(CANUM > 0)
+ple_data <- ple_data %>%
+filter(CANUM >= 1)
 
 # ==== 2. grouping ====
 # all the levels for the grouping: 
@@ -15,7 +15,7 @@ gruppen <- c("Year", "Area_large", "Season", "CatchCategory_corrected", "Fleet_c
 ple_weighed_avg <- ple_data %>%
   group_by(across(all_of(gruppen))) %>%
   summarise(
-    weighed_avg = sum(WECA_kg * CANUM) / sum(CANUM),  # use CANUM_tsd instead
+    weighed_avg = sum(WECA/1000 * CANUM) / sum(CANUM),  # use CANUM_tsd instead
     summ = sum(CANUM, na.rm = TRUE),  # <- summ up the CANUM
     .groups = "drop"
   ) %>%
@@ -164,7 +164,7 @@ lf_frac <- lf %>%
   select(Year, AgeOrLength, fraction)
 
 lf_mid_frac <- lf_mid %>%
-  left_join(cn, by = c("Year", "AgeOrLength"), suffix = c("_lf", "_cn")) %>%
+  left_join(cn_mid, by = c("Year", "AgeOrLength"), suffix = c("_lf", "_cn")) %>%
   mutate(
     fraction = `summ_lf` / `summ_cn`  # divide total numbers
   ) %>%
@@ -258,11 +258,11 @@ for (i in seq_along(tables)) {
   tbl_name <- tables[i]
   tbl <- get(tbl_name)
   
-  # Anzahl Zeilen und Spalten
+  # set numbers of rows based on tables
   n_rows <- nrow(tbl)
   n_cols <- ncol(tbl)
   
-  # Hilfsfunktion für leere Zeile
+  # add empty row, no reptition per column
   empty_row <- function() {
     as.data.frame(matrix("", nrow = 1, ncol = n_cols), stringsAsFactors = FALSE)
   }
