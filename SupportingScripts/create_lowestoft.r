@@ -4,6 +4,7 @@ library(tidyr)
 # ==== 1. read in the clean IC file ====
 ple_data <- read.csv("ple_data.csv") 
 
+# filter data with no sampling (Intercatch artifacts, e.g., for LogDIS or BMS)
 ple_data <- ple_data %>%
 filter(CANUM >= 1)
 
@@ -19,11 +20,11 @@ ple_weighed_avg <- ple_data %>%
     summ = sum(CANUM, na.rm = TRUE),  # <- summ up the CANUM
     .groups = "drop"
   ) %>%
-# ==== 5. NaN removed ====
+# remove NA (there shouldn't be any)
 filter(!is.nan(weighed_avg))
 
 
-# === 6. add 10+ as plusgroup ===
+# === 3. create 10+ as plus group (separate table) ===
 zeilen_10p <- ple_weighed_avg %>%
   filter(as.numeric(AgeOrLength) >= 10) %>%
   group_by(Year, Area_large, Season, CatchCategory_corrected, Fleet_corrected) %>%
@@ -33,29 +34,29 @@ zeilen_10p <- ple_weighed_avg %>%
     summ = sum(summ, na.rm = TRUE),
     .groups = "drop")
 
-# === 7. add 10+ as plusgroup ===
+# === 4. add 10+ as plus group ===
 ple_weighed_avg$AgeOrLength <- as.character(ple_weighed_avg$AgeOrLength)
 ple_weighed_avg <- bind_rows(ple_weighed_avg, zeilen_10p)
 
 
-# === 7. aread in the survival rates and add them to the table ===
+# === 5. read in the survival rates and add them to the table ===
 survival <- read.csv("survival")  
 
-# ==== 7.5 Join ====
+# ==== 5.5 Join with main table ====
 combine_ple_surv <- ple_weighed_avg %>%
   left_join(survival, by = c("Area_large", "Fleet_corrected", "Season"))
 
-# ==== 8. get the numbers of dead discards summ * survival_mid ====
+# ==== 6. get the numbers of dead discards summ * survival_mid ====
 combine_ple_surv <- combine_ple_surv %>%
   mutate(
     dead_discard = ifelse(CatchCategory_corrected == "Discards", summ * (1-survival_mid), NA))
 
-# ==== 9. show results and save ====
+# ==== 7. show results and save ====
 print(combine_ple_surv)
 # write.csv(combine_ple_surv, "combine_ple_surv", row.names = FALSE)
 
 
-# === 10. merge the table upwards to get the Lowestoft formats
+# === 8. merge the table upwards to get the Lowestoft formats
 # get rid of the ages above the plusgroup first
 combine_ple_surv2 <- combine_ple_surv %>%
   filter(
@@ -63,7 +64,8 @@ combine_ple_surv2 <- combine_ple_surv %>%
     (suppressWarnings(as.numeric(AgeOrLength)) < 10 & as.numeric(AgeOrLength) > 0)
   )
 
-# create the basic SAM files (no discard survival) 
+
+### 9. create the basic SAM files (no discard survival) 
 cn <- combine_ple_surv2 %>%
   group_by(Year, AgeOrLength) %>%
   summarise(
@@ -105,8 +107,10 @@ dw <- combine_ple_surv2 %>%
     .groups = "drop")		
 	
 	
-########## no creating the version using only dead discards	
+########## now creating the version using only dead discards	
 # add the dead landings into the column "dead discard"
+# this way, we only need to refer to one column and not adding two 
+# alternatively could make a new one named "catch" or "removal" etc.
 combine_ple_surv3 <- combine_ple_surv2 %>%
   mutate(
     dead_discard = if_else(is.na(dead_discard), summ, dead_discard)
@@ -171,23 +175,24 @@ lf_mid_frac <- lf_mid %>%
   select(Year, AgeOrLength, fraction)
 
 
-#### transform to Lowestoft
+#### transform to Lowestoft #######################
+
 table_names <- c("cn", "df", "lf", "cn_mid", "df_mid", "lf_mid")
 
-#### put 10plus group at the end
+#### loop for number-tables
 for (tbl_name in table_names) {
   
-  # Tabelle holen
+  # get tables
   tbl <- get(tbl_name)
   
-  # Umstrukturieren: AgeOrLength als Spalten, "10p" ans Ende
+  # re-structure: AgeOrLength as column, "10p" to the end, avoid NA
   tbl <- tbl %>%
     pivot_wider(
       names_from = AgeOrLength,
       values_from = summ
     ) %>%
     mutate(across(where(is.numeric), ~replace_na(., -9))) %>%  # make NA to -9
-    relocate(`10p`, .after = last_col())  # move plusgroup to the end
+    relocate(`10p`, .after = last_col())  # move plus group to the end
   
   # put them back in the global environment
   assign(paste0(tbl_name), tbl)
@@ -196,20 +201,20 @@ for (tbl_name in table_names) {
 #######################################################################
 table_names <- c("cw", "dw", "lw", "cw_mid", "dw_mid", "lw_mid")
 
-# widen the tables in a loop 
+# loop for weight tables
 for (tbl_name in table_names) {
   
-  # Tabelle holen
+  # read in tables
   tbl <- get(tbl_name)
   
-  # Umstrukturieren: AgeOrLength als Spalten, "10p" ans Ende
+  # re-structure: AgeOrLength as column, "10p" to the end, avoid NA
   tbl <- tbl %>%
     pivot_wider(
       names_from = AgeOrLength,
       values_from = weighed_avg
     ) %>%
     mutate(across(where(is.numeric), ~replace_na(., -9))) %>%  # make NA to -9
-    relocate(`10p`, .after = last_col())  # move plusgroup to the end
+    relocate(`10p`, .after = last_col())  # move plus group to the end
   
   # put them back in the global environment
   assign(paste0(tbl_name), tbl)
@@ -218,7 +223,7 @@ for (tbl_name in table_names) {
 #######################################################################
 table_names <- c("lf_frac", "lf_mid_frac")
 
-# Durch jede Tabelle iterieren
+# loop it for fraction tables
 for (tbl_name in table_names) {
   
   # get table
@@ -230,7 +235,7 @@ for (tbl_name in table_names) {
       names_from = AgeOrLength,
       values_from = fraction
     ) %>%
-    relocate(`10p`, .after = last_col())  # 10p ans Ende verschieben
+    relocate(`10p`, .after = last_col())  # move plus group to the end
   
   # put them back in the global environment
   assign(paste0(tbl_name), tbl)
@@ -312,17 +317,17 @@ for (i in seq_along(tables)) {
 # Table overview
 tables <- c("cn", "cw", "df", "dw", "lf", "lw", "cn_mid", "cw_mid", "df_mid", "dw_mid", "lf_mid", "lw_mid", "lf_frac", "lf_mid_frac")
 
-#  round the valus from line 6
+##  round the valus from line 6
 for (table_name in tables) {
   table_data <- get(table_name)
   
-  # make them numerical
+# make them numerical (header might cause R to read all lines as char)
   table_data[6:nrow(table_data), ] <- lapply(table_data[6:nrow(table_data), ], function(col) {
     if (is.character(col)) {
-      col <- suppressWarnings(as.numeric(col))  # Versuche die Spalte in numerisch zu konvertieren
+      col <- suppressWarnings(as.numeric(col))  # convert to numerical
     }
     if (is.numeric(col)) {
-      round(col, 3)  # round
+      round(col, 3)  # round to 3 digits
     } else {
       col  # leave header 
     }
