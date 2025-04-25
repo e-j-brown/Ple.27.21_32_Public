@@ -142,10 +142,15 @@ colnames(asum_CURRENT) <- c("Year", "R_age1", "Rlow", "Rhigh", "SSB", "SSBlow", 
 
 ```{r survivingDiscardRates}
 # Import discard survival rates ---- 
-survfrac <- read.csv("DataIn/CatchData/ple.27.21-32_DiscardSurvivalRates_2002_DataYear.csv")
-survfrac <- as.matrix(survfrac[, 2:ncol(survfrac)])
-rownames(survfrac) <- 2002:DataYear
-colnames(survfrac) <- 1:10
+# Surviving fractions of discards ----
+# ## Matrix from csv
+# survfrac <- read.csv("DataIn/CatchData/ple.27.21-32_DiscardSurvivalRates_2002_DataYear.csv")
+# survfrac <- as.matrix(survfrac[, 2:ncol(survfrac)])
+# rownames(survfrac) <- 2002:DataYear
+# colnames(survfrac) <- 1:10
+
+## Direct from DataCoordination Lowestoft file
+survfrac <- read.ices("Assessment Input/StockAnnex/df_frac.dat")
 
 # Cutdown ages of input data to 7+ group ----
 catch.no<-read.ices("Assessment Input/StockAnnex/cn_medium.dat")/1000
@@ -429,7 +434,7 @@ kable(intyear,
 
 ```
 
-# Raising Forecasts by Surviving Discards
+# Adding Surviving Discards to Forecast Catches
 
 In our assessment procedure, we utilise published survival rates of discarded fish across various gears, seasons (Quarters), and management regions to estimate annual proportions of discarded fish that would survive. This fraction of "surviving discards", are removed from the catch data that is put into the assessment (e.g. canum.dat and lf.dat).
 

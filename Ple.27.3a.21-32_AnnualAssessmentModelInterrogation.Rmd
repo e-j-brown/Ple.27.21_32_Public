@@ -767,15 +767,19 @@ In our assessment procedure, we utilise published survival rates of discarded fi
 
 The assessment model is then run with only landings and "dead discards", contributing to total catch.  Thus the forecasts made above, also only include landings and "dead discards".  To re-introduce the surviving component of the catch, we assume that the annual proportion of surviving discards by age remains _status quo_, that is the forecast advice year  (`r DataYear+2`) has the same ratios of surviving discards as the input data year (`r DataYear`).
 
-```{r catchEstSurviving, eval=FALSE}
+```{r catchEstSurviving, eval=TRUE}
 # Surviving fractions of discards ----
-survfrac <- read.csv("DataIn/CatchData/ple.27.21-32_DiscardSurvivalRates_2002_DataYear.csv")
-survfrac <- as.matrix(survfrac[, 2:ncol(survfrac)])
-rownames(survfrac) <- 2002:DataYear
-colnames(survfrac) <- 1:10
+# ## Matrix from csv
+# survfrac <- read.csv("DataIn/CatchData/ple.27.21-32_DiscardSurvivalRates_2002_DataYear.csv")
+# survfrac <- as.matrix(survfrac[, 2:ncol(survfrac)])
+# rownames(survfrac) <- 2002:DataYear
+# colnames(survfrac) <- 1:10
+
+## Direct from DataCoordination Lowestoft file
+survfrac <- read.ices("Assessment Input/StockAnnex/df_frac.dat")
 
 # Cutdown ages of input data to 7+ group ----
-catch.no<-read.ices("Assessment Input/StockAnnex/cn_medium.dat")/1000
+catch.no<-read.ices("Assessment Input/StockAnnex/cn_mid.dat")/1000
 cutage<-7
 low<-1
 GE<-which(as.numeric(colnames(catch.no))>=cutage)
@@ -815,22 +819,22 @@ dtcaton_CURRENT <- ddcaton_CURRENT+lcaton_CURRENT
 caton_CURRENT <- adcaton_CURRENT+lcaton_CURRENT
 caton_CURRENT_Check <- cn_CURRENT*fit_CURRENT$data$catchMeanWeight[, , "Residual catch"]
 
-newnums <- rbind(dcn_CURRENT[nrow(dcn_CURRENT), ],
-      ddcn_CURRENT[nrow(ddcn_CURRENT), ],
-      adcn_CURRENT[nrow(adcn_CURRENT), ],
-      sdcn_CURRENT[nrow(sdcn_CURRENT), ],
-      cn_CURRENT[nrow(cn_CURRENT), ],
-      # rep(" - ", times=ncol(dcn_CURRENT)),
-      ddcaton_CURRENT[nrow(ddcaton_CURRENT), ],
-      adcaton_CURRENT[nrow(adcaton_CURRENT), ],
-      lcaton_CURRENT[nrow(lcaton_CURRENT), ],
-      dtcaton_CURRENT[nrow(dtcaton_CURRENT), ],
-      caton_CURRENT[nrow(caton_CURRENT), ],
-      caton_CURRENT_Check[nrow(caton_CURRENT_Check), ])
-newnums <- round(newnums, 3)
-rownames(newnums) <- c("CatchAgeTable", "DeadDiscards", "AllDiscards", "SurvivingDiscards", "TotalCatchNo", "DeadDiscardCATONDW", "AllDiscardCATONDW", "LandingsCATONLW", "TotalDeadCATONDwLw", "TotalCATONDwLw", "TotalCATONCw")
+# newnums <- rbind(dcn_CURRENT[nrow(dcn_CURRENT), ],
+#       ddcn_CURRENT[nrow(ddcn_CURRENT), ],
+#       adcn_CURRENT[nrow(adcn_CURRENT), ],
+#       sdcn_CURRENT[nrow(sdcn_CURRENT), ],
+#       cn_CURRENT[nrow(cn_CURRENT), ],
+#       # rep(" - ", times=ncol(dcn_CURRENT)),
+#       ddcaton_CURRENT[nrow(ddcaton_CURRENT), ],
+#       adcaton_CURRENT[nrow(adcaton_CURRENT), ],
+#       lcaton_CURRENT[nrow(lcaton_CURRENT), ],
+#       dtcaton_CURRENT[nrow(dtcaton_CURRENT), ],
+#       caton_CURRENT[nrow(caton_CURRENT), ],
+#       caton_CURRENT_Check[nrow(caton_CURRENT_Check), ])
+# newnums <- round(newnums, 3)
+# rownames(newnums) <- c("CatchAgeTable", "DeadDiscards", "AllDiscards", "SurvivingDiscards", "TotalCatchNo", "DeadDiscardCATONDW", "AllDiscardCATONDW", "LandingsCATONLW", "TotalDeadCATONDwLw", "TotalCATONDwLw", "TotalCATONCw")
 
-# Check totals align with catchTable
+# Check totals align with catchTable ----
 ## Extract estimates from catchTable
 fit_summary <- catchtable(fit_CURRENT)
 
@@ -843,16 +847,17 @@ sdlCatchEst <- rowSums(caton_CURRENT)
 CatchEst <- rowSums(dcn_CURRENT*fit_CURRENT$data$catchMeanWeight[, , "Residual catch"])
 
 
-## totals calculated from total catch, from cayTable*cw
-data.frame(ManualCalcs=CatchEst, CatchTableVals=fit_summary[, "Estimate"], Difference=CatchEst-fit_summary[, "Estimate"])
+# ## totals calculated from total catch, from cayTable*cw
+# data.frame(ManualCalcs=CatchEst, CatchTableVals=fit_summary[, "Estimate"], Difference=CatchEst-fit_summary[, "Estimate"])
+# 
+# ## totals from independent discard and landings calculations
+# data.frame(ManualCalcs=dlCatchEst, CatchTableVals=fit_summary[, "Estimate"], Difference=dlCatchEst-fit_summary[, "Estimate"])
+# 
+# ## totals with re-added surviving discards
+# data.frame(ManualCalcs=sdlCatchEst, CatchTableVals=fit_summary[, "Estimate"], Difference=sdlCatchEst-fit_summary[, "Estimate"], survivingDiscards=rowSums(sdcn_CURRENT*fit_CURRENT$data$disMeanWeight[, , "Residual catch"]))
 
-## totals from independent discard and landings calculations
-data.frame(ManualCalcs=dlCatchEst, CatchTableVals=fit_summary[, "Estimate"], Difference=dlCatchEst-fit_summary[, "Estimate"])
 
-## totals with re-added surviving discards
-data.frame(ManualCalcs=sdlCatchEst, CatchTableVals=fit_summary[, "Estimate"], Difference=sdlCatchEst-fit_summary[, "Estimate"], survivingDiscards=rowSums(sdcn_CURRENT*fit_CURRENT$data$disMeanWeight[, , "Residual catch"]))
-
-# Create new ASUM with surviors added back ----
+# Create new ASUM with survivors added back ----
 ## Initialise new ASUM
 asum_Survivors <- asum_CURRENT[asum_CURRENT$Year != (DataYear+1), ]
 asum_Survivors$CatchSurv <- unname(sdlCatchEst)
@@ -873,7 +878,7 @@ asum_Survivors$CatchObsSurv <- rowSums(CatchData_NoSurvivals)
 
 ```
 
-```{r fig.cap= "Annual catch estimates and 95% confidence intervals (line and shaded area, respectively) for ple.27.21-32 and point annual observations (points).  Purple is the baseline model, while green is the outcome of the current stock annex procedure with the latest data, and orange are the observations."}
+```{r fig.cap= "Annual catch estimates (lines), 95% confidence intervals (ribbon) and point annual observations (points) for ple.27.21-32.  Green is the outcome of the current stock annex procedure with the latest data, orange are the observations the model is fit to (both without surviving discards), and blue are the values with suriving discards added back to the estimates."}
 pcat <- ggplot() +
   geom_line(data = asum_Survivors,
             mapping = aes(x=Year,
@@ -881,7 +886,7 @@ pcat <- ggplot() +
                           series="Estimated Catch with Surviving Discards"),
             colour = ebpal[8],
             size = 1) +
-  geom_point(asum_Survivors,
+  geom_point(data = asum_Survivors,
              mapping = aes(x=Year,
                            y=CatchObsSurv,
                            series="Observed Catches with Surviving Discards"),
@@ -900,7 +905,7 @@ pcat <- ggplot() +
                             series="Model Estimated Dead Catches"),
               fill = ebpal[2],
               alpha = 0.3) +
-  geom_point(asum_Survivors,
+  geom_point(data = asum_Survivors,
              mapping = aes(x=Year,
                            y=CatchObs,
                            series="Observed Catches NO Surviving Discards"),
