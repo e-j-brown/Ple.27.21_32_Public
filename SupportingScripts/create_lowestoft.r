@@ -174,6 +174,20 @@ lf_mid_frac <- lf_mid %>%
   ) %>%
   select(Year, AgeOrLength, fraction)
 
+# fraction tables for raising factory by age 
+cn_frac <- cn %>%
+  left_join(cn_mid, by = c("Year", "AgeOrLength"), suffix = c("_cn", "_cn_mid")) %>%
+  mutate(
+    fraction = (`summ_cn` - `summ_cn_mid`)/`summ_cn`  # divide total numbers
+  ) %>%
+  select(Year, AgeOrLength, fraction)
+
+df_frac <- df %>%
+  left_join(df_mid, by = c("Year", "AgeOrLength"), suffix = c("_df", "_df_mid")) %>%
+  mutate(
+    fraction = (`summ_df` - `summ_df_mid`)/`summ_df`  # divide total numbers
+  ) %>%
+  select(Year, AgeOrLength, fraction)
 
 #### transform to Lowestoft #######################
 
@@ -221,7 +235,7 @@ for (tbl_name in table_names) {
   }	
 
 #######################################################################
-table_names <- c("lf_frac", "lf_mid_frac")
+table_names <- c("lf_frac", "lf_mid_frac", "cn_frac", "df_frac")
 
 # loop it for fraction tables
 for (tbl_name in table_names) {
@@ -235,6 +249,7 @@ for (tbl_name in table_names) {
       names_from = AgeOrLength,
       values_from = fraction
     ) %>%
+    mutate(across(where(is.numeric), ~replace_na(., -9))) %>%  # make NA to -9
     relocate(`10p`, .after = last_col())  # move plus group to the end
   
   # put them back in the global environment
@@ -244,7 +259,7 @@ for (tbl_name in table_names) {
 
 ####### Lowestoft format ######
 # table names
-tables <- c("cn", "cw", "df", "dw", "lf", "lw", "cn_mid", "cw_mid", "df_mid", "dw_mid", "lf_mid", "lw_mid", "lf_frac", "lf_mid_frac")
+tables <- c("cn", "cw", "df", "dw", "lf", "lw", "cn_mid", "cw_mid", "df_mid", "dw_mid", "lf_mid", "lw_mid", "lf_frac", "lf_mid_frac", "cn_frac", "df_frac")
 
 # loop them and delete the year column
 for (tbl_name in tables) {
@@ -261,7 +276,7 @@ for (tbl_name in tables) {
 
   
 ### add header for each of the files 
-tables <- c("cn", "cw", "df", "dw", "lf", "lw", "cn_mid", "cw_mid", "df_mid", "dw_mid", "lf_mid", "lw_mid", "lf_frac", "lf_mid_frac")
+tables <- c("cn", "cw", "df", "dw", "lf", "lw", "cn_mid", "cw_mid", "df_mid", "dw_mid", "lf_mid", "lw_mid", "lf_frac", "lf_mid_frac","cn_frac", "df_frac")
 
 for (i in seq_along(tables)) {
   tbl_name <- tables[i]
@@ -315,7 +330,7 @@ for (i in seq_along(tables)) {
 
 ## Save all results as csv 
 # Table overview
-tables <- c("cn", "cw", "df", "dw", "lf", "lw", "cn_mid", "cw_mid", "df_mid", "dw_mid", "lf_mid", "lw_mid", "lf_frac", "lf_mid_frac")
+tables <- c("cn", "cw", "df", "dw", "lf", "lw", "cn_mid", "cw_mid", "df_mid", "dw_mid", "lf_mid", "lw_mid", "lf_frac", "lf_mid_frac", "cn_frac", "df_frac")
 
 ##  round the valus from line 6
 for (table_name in tables) {
