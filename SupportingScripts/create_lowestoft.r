@@ -170,6 +170,7 @@ lf_mid_frac <- lf_mid %>%
   ) %>%
   select(Year, AgeOrLength, fraction)
 
+
 #### transform to Lowestoft
 table_names <- c("cn", "df", "lf", "cn_mid", "df_mid", "lf_mid")
 
@@ -185,11 +186,13 @@ for (tbl_name in table_names) {
       names_from = AgeOrLength,
       values_from = summ
     ) %>%
-    relocate(`10p`, .after = last_col())  # 10p ans Ende verschieben
+    mutate(across(where(is.numeric), ~replace_na(., -9))) %>%  # make NA to -9
+    relocate(`10p`, .after = last_col())  # move plusgroup to the end
   
   # put them back in the global environment
   assign(paste0(tbl_name), tbl)
-  }	
+}	
+
 #######################################################################
 table_names <- c("cw", "dw", "lw", "cw_mid", "dw_mid", "lw_mid")
 
@@ -205,7 +208,8 @@ for (tbl_name in table_names) {
       names_from = AgeOrLength,
       values_from = weighed_avg
     ) %>%
-    relocate(`10p`, .after = last_col())  # 10p ans Ende verschieben
+    mutate(across(where(is.numeric), ~replace_na(., -9))) %>%  # make NA to -9
+    relocate(`10p`, .after = last_col())  # move plusgroup to the end
   
   # put them back in the global environment
   assign(paste0(tbl_name), tbl)
@@ -250,8 +254,8 @@ for (tbl_name in tables) {
   assign(tbl_name, tbl_cleaned)
 }
 
-
-#add header for each of the files 
+  
+### add header for each of the files 
 tables <- c("cn", "cw", "df", "dw", "lf", "lw", "cn_mid", "cw_mid", "df_mid", "dw_mid", "lf_mid", "lw_mid", "lf_frac", "lf_mid_frac")
 
 for (i in seq_along(tables)) {
