@@ -470,7 +470,7 @@ Catches for the year `r DataYear` are summarised across different factors below 
 
 ```{r TotalCatchAndPropPerArea}
 IC_agg_temp <- aggregate(CATON~Area,
-                         data = ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Landings", "Discards"),],
+                         data = ic_clean[ic_clean$Year == DataYear & !ic_clean$CatchCategory %in% c("BMS landing"),],
                          FUN = sum)
 
 Proportion <- numeric()
@@ -486,7 +486,7 @@ kable(IC_agg_temp,
 
 ```{r TotalCatchPerAreaAndFleet}
 kable(aggregate(CATON ~ Area+Fleet,
-                data = ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Landings", "Discards"),],
+                data = ic_clean[ic_clean$Year == DataYear & !ic_clean$CatchCategory %in% c("BMS landing"),],
                 FUN = sum),
       caption = paste0("Total commercial catch of plaice, per area and by fleet, in ", DataYear, " (tonnes)."),
       digits = 2) 
@@ -494,7 +494,7 @@ kable(aggregate(CATON ~ Area+Fleet,
 
 ```{r TotalCatchPerFleet2}
 kable(aggregate(CATON ~ Fleet2,
-                data = ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Landings", "Discards"),],
+                data = ic_clean[ic_clean$Year == DataYear & !ic_clean$CatchCategory %in% c("BMS landing"),],
                 FUN = sum),
       caption = paste0("Total commercial catch of plaice, by new fleet concept (management area * fleet), in ", DataYear, " (tonnes)."),
       digits = 2) 
@@ -502,7 +502,7 @@ kable(aggregate(CATON ~ Fleet2,
 
 ```{r TotalCatchPerAreaAndFleet2}
 kable(aggregate(CATON ~ Area+Fleet2,
-                data = ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Landings", "Discards"),],
+                data = ic_clean[ic_clean$Year == DataYear & !ic_clean$CatchCategory %in% c("BMS landing"),],
                 FUN = sum),
       caption = paste0("Total commercial catch of plaice, per area and new fleet concept (management area * fleet), in ", DataYear, " (tonnes)."),
       digits = 2) 
@@ -512,8 +512,10 @@ kable(aggregate(CATON ~ Area+Fleet2,
 #===
 # Figure Catch by catch category (all areas, all countries)
 #====
+IC_agg_temp <- ic_clean[!ic_clean$CatchCategory %in% c("BMS landing","Logbook Registered Discard", "Catch"),]
+IC_agg_temp$CatchCategory <- gsub(pattern = "BMS", replacement = "Discards", x = IC_agg_temp$CatchCategory)
 IC_agg_temp <- aggregate(CATON~Year+CatchCategory,
-                         data = ic_clean[!ic_clean$CatchCategory %in% c("BMS", "BMS landing","Logbook Registered Discard", "Catch"),],
+                         data = IC_agg_temp,
                          FUN = sum)
 
 plt_stockCatch <- ggplot() +
@@ -541,8 +543,10 @@ style(ggplotly(plt_stockCatch), showlegend = FALSE)
 #===
 # Figure Catch by catch category (all areas, all countries)
 #====
+IC_agg_temp <- ic_clean[!ic_clean$CatchCategory %in% c("BMS landing","Logbook Registered Discard", "Catch"),]
+IC_agg_temp$CatchCategory <- gsub(pattern = "BMS", replacement = "Discards", x = IC_agg_temp$CatchCategory)
 IC_agg_temp <- aggregate(CATON~Year+CatchCategory+Area,
-                         data = ic_clean[!ic_clean$CatchCategory %in% c("BMS", "BMS landing","Logbook Registered Discard", "Catch"),],
+                         data = IC_agg_temp,
                          FUN = sum)
 
 plt_catchcat <- ggplot() +
@@ -601,8 +605,10 @@ Landings below minimum size (BMS landing) are estimated as part of the discards,
   
 ```{r}
 ## Aggregate catches by year and area
+IC_agg_temp <- ic_clean[!ic_clean$CatchCategory %in% c("BMS landing","Logbook Registered Discard", "Catch"),]
+IC_agg_temp$CatchCategory <- gsub(pattern = "BMS", replacement = "Discards", x = IC_agg_temp$CatchCategory)
 IC_agg_temp <- aggregate(CATON~Year+CatchCategory+Area,
-                         data = ic_clean[ic_clean$CatchCategory %in% c("Landings", "Discards"),],
+                         data = IC_agg_temp,
                          FUN = sum)
 
 disrat <- as.data.frame(reshape(IC_agg_temp,
@@ -613,8 +619,10 @@ disrat$DiscardRatio <- disrat$CATON.Discards/(disrat$CATON.Landings+disrat$CATON
 disrat$Area <- factor(disrat$Area, levels = c("27.3.a.21", "27.3.b.23", "27.3.c.22", "27.3.d.24", "27.3.d.25", "27.3.d.26", "27.3.d.27", "27.3.d.28", "27.3.d.28.2", "27.3.d.29", "27.3.d.30", "27.3.d.31", "27.3.d.32"))
 
 ## Aggregate catches by year and fleet
+IC_agg_temp <- ic_clean[!ic_clean$CatchCategory %in% c("BMS landing","Logbook Registered Discard", "Catch"),]
+IC_agg_temp$CatchCategory <- gsub(pattern = "BMS", replacement = "Discards", x = IC_agg_temp$CatchCategory)
 IC_agg_temp <- aggregate(CATON~Year+CatchCategory+Fleet2,
-                         data = ic_clean[ic_clean$CatchCategory %in% c("Landings", "Discards"),],
+                         data = IC_agg_temp,
                          FUN = sum)
 
 disratFleet <- as.data.frame(reshape(IC_agg_temp,
@@ -622,7 +630,6 @@ disratFleet <- as.data.frame(reshape(IC_agg_temp,
                                 timevar = "CatchCategory",
                                 direction = "wide"))
 disratFleet$DiscardRatio <- disratFleet$CATON.Discards/(disratFleet$CATON.Landings+disratFleet$CATON.Discards)
-
 
 rownames(disrat) <- NULL
 ```
@@ -770,8 +777,10 @@ These same trends are mirrored in the discard rates by country, where vessels ma
 #===
 # Prep data
 #====
+IC_agg_temp <- ic_clean[!ic_clean$CatchCategory %in% c("BMS landing","Logbook Registered Discard", "Catch"),]
+IC_agg_temp$CatchCategory <- gsub(pattern = "BMS", replacement = "Discards", x = IC_agg_temp$CatchCategory)
 IC_agg_temp <- aggregate(CATON~Year+CatchCategory+Country,
-                         data = ic_clean[ic_clean$CatchCategory %in% c("Landings", "Discards"),],
+                         data = IC_agg_temp,
                          FUN = sum)
 
 disrat <- as.data.frame(reshape(IC_agg_temp,
@@ -804,9 +813,10 @@ Drilling down into a bit more detail we can see where (subdivision), when (quart
 #===
 # Figure Discards/landings of DataYear by quarter and gear
 #====
+IC_agg_temp <- ic_clean[!ic_clean$CatchCategory %in% c("BMS landing","Logbook Registered Discard", "Catch"),]
+IC_agg_temp$CatchCategory <- gsub(pattern = "BMS", replacement = "Discards", x = IC_agg_temp$CatchCategory)
 IC_agg_temp <- aggregate(CATON~Season+CatchCategory+Area+Fleet,
-                         # data = ic_clean[ic_clean$Year == DataYear & ic_clean$Fleet %in% c("Active", "Passive"), ],
-                         data = ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Discards", "Landings"), ],
+                         data = IC_agg_temp,
                          FUN = sum)
 IC_agg_temp <- droplevels(IC_agg_temp)
 #=====
@@ -837,9 +847,10 @@ style(ggplotly(plt_disrat_Q_area), showlegend = FALSE)
 #===
 # Figure Discards/landings of DataYear by quarter and gear
 #====
+IC_agg_temp <- ic_clean[!ic_clean$CatchCategory %in% c("BMS landing","Logbook Registered Discard", "Catch"),]
+IC_agg_temp$CatchCategory <- gsub(pattern = "BMS", replacement = "Discards", x = IC_agg_temp$CatchCategory)
 IC_agg_temp <- aggregate(CATON~Area+CatchCategory+Fleet+Season,
-                         # data = ic_clean[ic_clean$Year == DataYear & ic_clean$Fleet %in% c("Active", "Passive"), ],
-                         data = ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Discards", "Landings"), ],
+                         data = IC_agg_temp,
                          FUN = sum)
 IC_agg_temp <- droplevels(IC_agg_temp)
 #=====
@@ -867,9 +878,12 @@ Furthermore, we can split the discard rates by our new fleet concept, that of fl
 #===
 # Prep data
 #====
+IC_agg_temp <- ic_clean[!ic_clean$CatchCategory %in% c("BMS landing","Logbook Registered Discard", "Catch"),]
+IC_agg_temp$CatchCategory <- gsub(pattern = "BMS", replacement = "Discards", x = IC_agg_temp$CatchCategory)
 IC_agg_temp <- aggregate(CATON~Year+CatchCategory+Fleet2,
-                         data = ic_clean[ic_clean$CatchCategory %in% c("Landings", "Discards"),],
+                         data = IC_agg_temp,
                          FUN = sum)
+IC_agg_temp <- droplevels(IC_agg_temp)
 
 disrat <- as.data.frame(reshape(IC_agg_temp,
                                 idvar = c("Year","Fleet2"),
@@ -901,9 +915,12 @@ ggplotly(plt_disrat_fleet)
 #===
 # Data agreggation
 #====
+IC_agg_temp <- ic_clean[!ic_clean$CatchCategory %in% c("BMS landing","Logbook Registered Discard", "Catch"),]
+IC_agg_temp$CatchCategory <- gsub(pattern = "BMS", replacement = "Discards", x = IC_agg_temp$CatchCategory)
 IC_agg_temp <- aggregate(CATON~Year+CatchCategory,
-                         data = ic_clean,
+                         data = IC_agg_temp,
                          FUN = sum)
+IC_agg_temp <- droplevels(IC_agg_temp)
 
 disrat <- as.data.frame(reshape(IC_agg_temp,
                                 idvar = c("Year"),
@@ -950,9 +967,13 @@ The advice sheets require specific information which is presented below
 #===
 # Aggregate catches in a format for use in the stock splitting table
 #====
+IC_agg_temp <- ic_clean[!ic_clean$CatchCategory %in% c("BMS landing","Logbook Registered Discard", "Catch"),]
+IC_agg_temp$CatchCategory <- gsub(pattern = "BMS", replacement = "Discards", x = IC_agg_temp$CatchCategory)
 IC_agg_temp <- aggregate(CATON~CatchCategory+Area,
-                         data = ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Landings", "Discards"),],
-                         FUN = "sum")
+                         data = IC_agg_temp,
+                         FUN = sum)
+IC_agg_temp <- droplevels(IC_agg_temp)
+
 IC_agg_temp <- reshape(IC_agg_temp, direction = "wide", idvar = "Area", timevar = "CatchCategory")
 IC_agg_temp[is.na(IC_agg_temp$CATON.Discards), "CATON.Discards"] <- 0
 IC_agg_temp$Catch <- IC_agg_temp$CATON.Discards + IC_agg_temp$CATON.Landings
@@ -964,12 +985,30 @@ kable(IC_agg_temp,
       digits = 2)
 ```
 
-- The catch from subdivisions 21, 22 & 23 combined in `r (DataYear)` was `r sum(ic_clean[ic_clean$Year == DataYear, "CATON"])` tonnes.  
+```{r stockSplitting}
+IC_agg_temp <- ic_clean[ic_clean$Year == DataYear & !ic_clean$CatchCategory %in% c("BMS landing","Logbook Registered Discard", "Catch"),]
+IC_agg_temp$CatchCategory <- gsub(pattern = "BMS", replacement = "Discards", x = IC_agg_temp$CatchCategory)
+IC_agg_temp <- aggregate(CATON~Area+CatchCategory,
+                         data = IC_agg_temp,
+                         FUN = sum)
+IC_agg_temp <- droplevels(IC_agg_temp)
+
+IC_agg_temp <- data.frame(Subdivision = c("SD 21", "SDs 22-32"),
+                          `Catch 2024` = c(sum(IC_agg_temp[IC_agg_temp$Area == "27.3.a.21", "CATON"]), sum(IC_agg_temp[IC_agg_temp$Area != "27.3.a.21", "CATON"])),
+                          `Landings 2024` = c(sum(IC_agg_temp[IC_agg_temp$Area == "27.3.a.21" & IC_agg_temp$CatchCategory == "Landings", "CATON"]), sum(IC_agg_temp[IC_agg_temp$Area != "27.3.a.21" & IC_agg_temp$CatchCategory == "Landings", "CATON"])))
+
+
+kable(IC_agg_temp,
+      caption = paste0("Catches and landings by management area in ", DataYear, " (tonnes). _Used for the stock splitting table_."),
+      digits = 2)
+```
+
+
+- The catch from all subdivisions combined in `r (DataYear)` was `r sum(ic_clean[ic_clean$Year == DataYear, "CATON"])` tonnes.  
 - The landings from subdivisions 21, 22 & 23 combined in `r (DataYear)` was `r sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Landings", "CATON"])` tonnes.  
   - The percentage of landings that were taken in _active_ gears was `r ((sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Landings" & ic_clean$Fleet == "Active", "CATON"]))/(sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Landings", "CATON"])))*100`%. 
   - The percentage of landings that were taken in _passive_ gears was `r ((sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Landings" & ic_clean$Fleet == "Passive", "CATON"]))/(sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Landings", "CATON"])))*100`%.  
 - The discards from subdivisions 21, 22 & 23 combined in `r (DataYear)` was `r sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Discards", "CATON"])` tonnes.  
-
 
 The _History of commercial catch and landings_ table in the advice sheet requires that BMS official landings are subtracted from the discard values. _Need to determine the advice sheet resolution requirements (by stock, by management area, by subdivision etc.) before reworking this code to fit._
 ```{r manualCatchCalcs, eval=FALSE}
@@ -1055,6 +1094,35 @@ kable(adctchtble,
       caption = paste0("Official catch numbers by country and subdivision for ", DataYear, ".  Official landings of BMS have been subtracted from Discards. _can be copy-pasted into the advice sheet_."),
       digits = 0)
 
+```
+
+```{r CatchLandingDiscardSAG, eval=TRUE}
+cn_full <- read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/cn.dat")/1000
+cn_surv <- read.ices("Assessment Input/StockAnnex/cn_mid.dat")/1000
+cw_full <- read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/cw.dat")
+dw_surv <- read.ices("Assessment Input/StockAnnex/dw_mid.dat")
+dw_full <- read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/dw.dat")
+lw_surv <- read.ices("Assessment Input/StockAnnex/lw_mid.dat")
+lf_surv <- read.ices("Assessment Input/StockAnnex/lf_mid_frac.dat")
+ddf_surv <- 1-lf_surv
+ddn_surv <- ddf_surv*cn_surv
+ln_surv <- lf_surv*cn_surv
+sdn_surv <- cn_full - (ddn_surv + ln_surv)
+
+ddm <- ddn_surv*dw_surv
+sdm <- sdn_surv*dw_full
+lm <- ln_surv*lw_surv
+
+catchSAG <- data.frame(Year = 2002:DataYear,
+                       Landings = rowSums(lm),
+                       DeadDiscards = rowSums(ddm),
+                       SurvivingDiscards = rowSums(sdm)
+                       )
+rownames(catchSAG) <- NULL
+
+kable(catchSAG,
+      caption = paste0("Catches by catch category (tonnes). _Used for the catches in SAG, surviving discards as custom series_."),
+      digits = 2)
 ```
 
 ### Commercial Sampling Coverage

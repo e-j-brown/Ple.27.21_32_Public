@@ -517,6 +517,28 @@ pcat <- ggplot() +
 
 ggplotly(pcat, tooltip = c("series", "x", "y"))
 ```
+## Model Estimates Table
+Here we create a table that can be copied into the ices SAG system to generate standard graphs.
+
+```{r sagTable}
+#===
+# table of Recruitment, SSB, TSB and F
+#====
+tsb<-tsbtable(fit_CURRENT)
+colnames(tsb)<-c("TSB","Low", "High")
+tabsum <- as.data.frame(cbind(summary(fit_CURRENT), tsb))
+tabsum$Year <- as.integer(rownames(tabsum))
+rownames(tabsum) <- NULL
+
+colnames(tabsum) <- c("R_age1", "RLow", "RHigh", "SSB", "SSBLow", "SSBHigh", "Fbar", "FLow", "FHigh", "TSB", "TSBLow", "TSBHigh", "Year")
+tabsum <- tabsum[, c("Year", "RLow", "R_age1", "RHigh", "TSBLow", "TSB", "TSBHigh",  "SSBLow", "SSB","SSBHigh", "FLow", "Fbar", "FHigh")]
+
+
+kable(tabsum,
+      caption = paste0("Estimated recruitment, spawning stock biomass (SSB), total stock biomass (TSB) and fishing mortality for ages 3-5 of ple.27.21-23."),
+      digits = 2) 
+```
+
 
 # Model Performance and Sensitivities
 Now that we've interrogated the model's fit and interpreted its results, we should also see how dependent these results are on the input data. In the leave-one-out  and the retrospective analyses, we remove different tuning fleets and recent data, to see how robust the model's estimations are to the current context.

@@ -140,6 +140,24 @@ colnames(asum_CURRENT) <- c("Year", "R_age1", "Rlow", "Rhigh", "SSB", "SSBlow", 
 #=====
 ```
 
+# Short Term Forecast Scenarios
+## Forecast configurations
+Short term forecasts are run for a number of different scenarios according to different forms of catch advice that have been requested in the past, or may be relevant in various scenarios.   
+
+The below code generates a long list of scenarios.  Depending on whether the object _isFinal_, at the top of the document, is set to TRUE or FALSE, these forecasts are estimated with more or fewer iterations, respectively.  If _isFinal_ is set to FALSE then only a small number of iterations (5000) are used for all scenarios, except _F = F~MSY~_, which is always run at full (50,000).  If _isFinal_ is set to true, a larger number of iterations (50,000) is used for all scenarios.
+
+Furthermore, in these configurations we set the number of years in which averages of biological data are taken, as well as the period over which recruitment is re-sampled to obtain a median for use in forecasts.  The stock weights at age are not taken from an average, because they are fit to data within the assessment model, this fit is used to predict forward, along with other stock parameters. 
+
+_Note_: We don't use the within assessment year (`r DataYear+1`) estimation of recruitment, as this is derived from only one data point (Q1 surveys).
+
+```{r basicForecastSettings}
+nruns <- ifelse(isFinal, 50000, 5000)
+bioAveYears <- 3
+bay <- bioAveYears-2
+recyears <- 2002:DataYear
+FC <- list()
+```
+
 ```{r survivingDiscardRates}
 # Surviving discard fractions from discards and total catch - from DataCoordination Lowestoft file
 survfrac <- read.ices("Assessment Input/StockAnnex/df_frac.dat")
@@ -165,27 +183,9 @@ E1<-which(as.numeric(colnames(catch.no))==cutage)
 w1<-catch.no[,GE1]/rowSums(catch.no[,GE1])
 
 survCatchFrac[,E1]<-rowSums(survCatchFrac[,GE1]*w1)
-survCatchFrac<-survCatchFrac[,low:E1]
+survCatchFrac <- mean(survCatchFrac[(nrow(survCatchFrac)-bioAveYears):nrow(survCatchFrac),low:E1])
 ```
 
-
-# Short Term Forecast Scenarios
-## Forecast configurations
-Short term forecasts are run for a number of different scenarios according to different forms of catch advice that have been requested in the past, or may be relevant in various scenarios.   
-
-The below code generates a long list of scenarios.  Depending on whether the object _isFinal_, at the top of the document, is set to TRUE or FALSE, these forecasts are estimated with more or fewer iterations, respectively.  If _isFinal_ is set to FALSE then only a small number of iterations (5000) are used for all scenarios, except _F = F~MSY~_, which is always run at full (50,000).  If _isFinal_ is set to true, a larger number of iterations (50,000) is used for all scenarios.
-
-Furthermore, in these configurations we set the number of years in which averages of biological data are taken, as well as the period over which recruitment is re-sampled to obtain a median for use in forecasts.  The stock weights at age are not taken from an average, because they are fit to data within the assessment model, this fit is used to predict forward, along with other stock parameters. 
-
-_Note_: We don't use the within assessment year (`r DataYear+1`) estimation of recruitment, as this is derived from only one data point (Q1 surveys).
-
-```{r basicForecastSettings}
-nruns <- ifelse(isFinal, 50000, 5000)
-bioAveYears <- 4
-bay <- bioAveYears-2
-recyears <- 2002:DataYear
-FC <- list()
-```
 
 ## Forecast scenarios
 In addition to the basic *F~msy~* scenario, we also provide a range of alternate scenarios to help inform managers of the potential different outcomes, should they base their advice on other assumptions, or should the fishery operate in an unexpected way. These alternate scenarios are as follows:
@@ -400,43 +400,6 @@ ForcTable <- ForcTable[, c(ncol(ForcTable)-1, ncol(ForcTable), 1:(ncol(ForcTable
 rownames(ForcTable) <- NULL
 ```
 
-# Short Term Forecast Assumptions
-
-To make these forecasts we had to make some assumptions about what is happening in the intermediate year, `r DataYear+1`. These are defined as:
-
-```{r IntermediateYearAssumptions}
-intyear <- data.frame(Variable = c("F~ages 3-6~",
-                                   paste0("SSB(", (DataYear+2), ")"),
-                                   paste0("R~age 1~ (", (DataYear+1), " & ", (DataYear+2), ")"),
-                                   paste0("Total catch (", (DataYear+1), ")"),
-                                   paste0("Projected Landings (", (DataYear+1), ")"),
-                                   paste0("Projected Discards (", (DataYear+1), ")"),
-                                   paste0("Survival Rate of Discards (", (DataYear+1), ")")),
-                      Value = c(asum_CURRENT[asum_CURRENT$Year == (DataYear),"Fbar"],
-                                ForcTable[ForcTable$Year == (DataYear+2) & ForcTable$scenario == "Fmsy", "ssb:median"],
-                                ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "rec:median"],
-                                ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "catch:median"],
-                                ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Land:median"],
-                                ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Discard:median"],
-                                paste(round(unname(survfrac[nrow(survfrac), ]), 2), collapse=", ")),
-                      Notes = c(paste0("F~ages 3-6~ in ", DataYear, "."),
-                                "Short-term forecast; tonnes.",
-                                paste0("Median resampled from the entire time series of recruitment (excluding latest year with only Q1 data ", (DataYear+1), "); thousands."),
-                                paste0("Short-term forecast using F(", (DataYear+1), "); tonnes."),
-                                paste0("Short-term forecast; assuming average landings ratio by age in ", DataYear-4, "-", DataYear, "; tonnes."),
-                                paste0("Short-term forecast; assuming average discard ratio by age in ", DataYear-4, "-", DataYear, "; tonnes."),
-                                paste0("Survival rates in discards, by age (1-7), in ", DataYear, ".")
-                      )
-)
-
-kable(intyear,
-      caption = "Assumptions made for the interim year and in the forecast",
-      digits = 3)
-
-# write.csv(intyear, file = paste0("Tables/Ple.27.21-23_ForecastAssumptions_", DataYear+1, ".csv"))
-
-```
-
 # Adding Surviving Discards to Forecast Catches
 
 In our assessment procedure, we utilise published survival rates of discarded fish across various gears, seasons (Quarters), and management regions to estimate annual proportions of discarded fish that would survive. This fraction of "surviving discards", are removed from the catch data that is put into the assessment (e.g. canum.dat and lf.dat).
@@ -510,6 +473,49 @@ ForcTable$`survCatch:low`<- ForcTable$`catch:low`+(ForcTable$`survCatch:median`-
 ForcTable$`survCatch:high` <- ForcTable$`catch:high`+(ForcTable$`survCatch:median`-ForcTable$`catch:median`)
 ```
 
+
+# Short Term Forecast Assumptions
+
+To make these forecasts we had to make some assumptions about what is happening in the intermediate year, `r DataYear+1`. These are defined as:
+
+```{r IntermediateYearAssumptions}
+intyear <- data.frame(Variable = c("F~ages 3-6~",
+                                   paste0("SSB(", (DataYear+2), ")"),
+                                   paste0("R~age 1~ (", (DataYear+1), " & ", (DataYear+2), ")"),
+                                   paste0("Total catch (", (DataYear+1), ")"),
+                                   paste0("Projected Landings (", (DataYear+1), ")"),
+                                   paste0("Projected Discards (", (DataYear+1), ")"),
+                                   paste0("Discard Survival Rate (", (DataYear+1), ")"),
+                                   paste0("Projected Surviving Discards (", (DataYear+1), ")"),
+                                   paste0("Projected Dead Discards (", (DataYear+1), ")")),
+                      Value = c(asum_CURRENT[asum_CURRENT$Year == (DataYear),"Fbar"],
+                                ForcTable[ForcTable$Year == (DataYear+2) & ForcTable$scenario == "Fmsy", "ssb:median"],
+                                ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "rec:median"],
+                                ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "survCatch:median"],
+                                ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Land:median"],
+                                ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "survCatch:median"] -                                 ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Land:median"],
+                                paste(round(unname(colMeans(survfrac[(nrow(survfrac)-bioAveYears):nrow(survfrac),])), 2), collapse=", "),
+                                (ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "survCatch:median"] -                                 ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Land:median"]) - ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Discard:median"],
+                                ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Discard:median"]),
+                      Notes = c(paste0("F~ages 3-6~ in ", DataYear, "."),
+                                "Short-term forecast; tonnes.",
+                                paste0("Median resampled from the entire time series of recruitment (excluding latest year with only Q1 data ", (DataYear+1), "); thousands."),
+                                paste0("Short-term forecast using F(", (DataYear+1), "), plus surviving discards; tonnes."),
+                                paste0("Short-term forecast; assuming average landings pattern by age in ", (DataYear-bioAveYears), "-", DataYear, "; tonnes."),
+                                paste0("Short-term forecast; assuming average discard pattern and survival, by age, in ", (DataYear-bioAveYears), "-", DataYear, ", plus surviving discards; tonnes."),
+                                paste0("Survival rates in discards, by age (1-7), in ", (DataYear-bioAveYears), "-", DataYear, "."),
+                                paste0("Short-term forecast; assuming an average discard pattern and survival, by age, in ", (DataYear-bioAveYears), "-", DataYear, ", plus surviving discards; tonnes."),
+                                paste0("Short-term forecast; assuming an average discard pattern and survival, by age, in ", (DataYear-bioAveYears), "-", DataYear, ", plus surviving discards; tonnes.")
+                      )
+)
+
+kable(intyear,
+      caption = "Assumptions made for the interim year and in the forecast",
+      digits = 3)
+
+# write.csv(intyear, file = paste0("Tables/Ple.27.21-23_ForecastAssumptions_", DataYear+1, ".csv"))
+
+```
 # Short Term Forecast Results
 
 The short-term forecasts include the current data-year, the intermediate year (i.e. the assessment year), the advice year (one year in the future), and the furthermost forecast year (three years ahead of the latest full dataset).  The current forecast years are `r paste(DataYear:(DataYear+3), sep = ", ")`.
@@ -760,33 +766,41 @@ kable(cotable,
 cotable <- data.frame( a = character(),
                        b = integer(),
                        c = numeric(),
-                       d = integer(),
+                       d = numeric(),
                        e = numeric(),
-                       f = numeric())
+                       f = integer(),
+                       g = numeric(),
+                       h = numeric())
 
 for(i in unique(ForcTable$scenario)){
   a <- ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "scenario"]
   b <- ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "survCatch:median"]
-  c <- ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "fbar:median"]
-  d <- ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+3), "ssb:median"]
-  e <- (ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+3), "ssb:median"] - ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "ssb:median"])/ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "ssb:median"]
-  f <- (ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "survCatch:median"] - LastIcesAdvice)/LastIcesAdvice
+  c <- ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "Land:median"]
+  d <- (ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "survCatch:median"]-ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "Land:median"])
+  e <- ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "fbar:median"]
+  f <- ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+3), "ssb:median"]
+  g <- (ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+3), "ssb:median"] - ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "ssb:median"])/ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "ssb:median"]
+  h <- (ForcTable[ForcTable$scenario == i & ForcTable$Year == (DataYear+2), "survCatch:median"] - LastIcesAdvice)/LastIcesAdvice
   
-  cotable <- rbind(cotable, data.frame(a, b, c, d, e, f))
+  cotable <- rbind(cotable, data.frame(a, b, c, d, e, f, g, h))
 }
 
 colnames(cotable) <- c("Basis",
                        paste0("TotalCatch_",(DataYear+2)),
-                       paste0("F_", (DataYear+2)),
+                       paste0("Projected Landings_", (DataYear+2)),
+                       paste0("Projected Total Discards_", (DataYear+2)),
+                       paste0("Total F_", (DataYear+2)),
                        paste0("SSB_", (DataYear+3)),
                        paste0("%SSB_change_", (DataYear+3), "_cf_", (DataYear+2)),
                        paste0("%ChangeAdvice_", (DataYear+2), "_cf_", (DataYear+1)))
 
 cotable[,2] <- round(cotable[,2])
-cotable[,3] <- icesRound(cotable[,3])
+cotable[,3] <- round(cotable[,3])
 cotable[,4] <- round(cotable[,4])
-cotable[,5] <- icesRound(cotable[,5]*100, percent = TRUE, sign = FALSE)
-cotable[,6] <- icesRound(cotable[,6]*100, percent = TRUE, sign = FALSE)
+cotable[,5] <- icesRound(cotable[,5])
+cotable[,6] <- round(cotable[,6])
+cotable[,7] <- icesRound(cotable[,7]*100, percent = TRUE, sign = FALSE)
+cotable[,8] <- icesRound(cotable[,8]*100, percent = TRUE, sign = FALSE)
 
 kable(cotable,
       caption = "Catch Options Table (with Surviving Discards) formatted for advice sheet (ICES rounding rules applied)",
@@ -796,4 +810,5 @@ kable(cotable,
 
 ```
 
-
+# Splitting Advice for Management Areas
+This stock covers ICES subdivisions 21 to 32.  Subdivision 21 (Kattegat), falls under the North Sea Management area and, therefore, has its Total Allowable Catch determined independently of the rest of the stock.  In the past, when this stock was assessed as two components, independent assessments provided estimates of catches, landings and projected advice which were used to determine a splitting ration of said advice, based on the 
