@@ -158,35 +158,6 @@ recyears <- 2002:DataYear
 FC <- list()
 ```
 
-```{r survivingDiscardRates}
-# Surviving discard fractions from discards and total catch - from DataCoordination Lowestoft file
-survfrac <- read.ices("Assessment Input/StockAnnex/df_frac.dat")
-survCatchFrac <- read.ices("Assessment Input/StockAnnex/cn_frac.dat")
-
-## Cutdown ages of input data to 7+ group
-catch.no<-read.ices("Assessment Input/StockAnnex/cn_mid.dat")/1000
-cutage<-7
-low<-1
-GE<-which(as.numeric(colnames(catch.no))>=cutage)
-E<-which(as.numeric(colnames(catch.no))==cutage)
-w<-catch.no[,GE]/rowSums(catch.no[,GE])
-wex<-rbind(w,w[nrow(w),])
-
-survfrac[,E]<-rowSums(survfrac[,GE]*w)
-survfrac<-survfrac[,low:E]
-
-## Boil down to one number per year
-cutage<-1
-low<-1
-GE1<-which(as.numeric(colnames(catch.no))>=cutage)
-E1<-which(as.numeric(colnames(catch.no))==cutage)
-w1<-catch.no[,GE1]/rowSums(catch.no[,GE1])
-
-survCatchFrac[,E1]<-rowSums(survCatchFrac[,GE1]*w1)
-survCatchFrac <- mean(survCatchFrac[(nrow(survCatchFrac)-bioAveYears):nrow(survCatchFrac),low:E1])
-```
-
-
 ## Forecast scenarios
 In addition to the basic *F~msy~* scenario, we also provide a range of alternate scenarios to help inform managers of the potential different outcomes, should they base their advice on other assumptions, or should the fishery operate in an unexpected way. These alternate scenarios are as follows:
 
@@ -408,6 +379,33 @@ The assessment model is then run with only landings and "dead discards", contrib
 
 ```{r forecastSurvivors, eval=TRUE}
 # Add survivors back to model estimations ----
+# Surviving discard fractions from discards and total catch - from DataCoordination Lowestoft file
+survfrac <- read.ices("Assessment Input/StockAnnex/df_frac.dat")
+survCatchFrac <- read.ices("Assessment Input/StockAnnex/cn_frac.dat")
+
+## Cutdown ages of input data to 7+ group
+catch.no<-read.ices("Assessment Input/StockAnnex/cn_mid.dat")/1000
+cutage<-7
+low<-1
+GE<-which(as.numeric(colnames(catch.no))>=cutage)
+E<-which(as.numeric(colnames(catch.no))==cutage)
+w<-catch.no[,GE]/rowSums(catch.no[,GE])
+wex<-rbind(w,w[nrow(w),])
+
+## Calculate discard survival rate by age for 1 -> 7
+survfrac[,E]<-rowSums(survfrac[,GE]*w)
+survfrac<-survfrac[,low:E]
+
+## Boil down to one number per year
+cutage<-1
+low<-1
+GE1<-which(as.numeric(colnames(catch.no))>=cutage)
+E1<-which(as.numeric(colnames(catch.no))==cutage)
+w1<-catch.no[,GE1]/rowSums(catch.no[,GE1])
+
+## Calculate CATCH survival rate for all ages, by number, in recent years (specified by bioAveYears)
+survCatchFrac[,E1]<-rowSums(survCatchFrac[,GE1]*w1)
+survCatchFrac <- mean(survCatchFrac[(nrow(survCatchFrac)-bioAveYears):nrow(survCatchFrac),low:E1])
 
 ## Landings and DEAD Discards combined
 dcn_CURRENT <- caytable(fit_CURRENT)[!rownames(caytable(fit_CURRENT)) %in% (DataYear+1), ]
@@ -467,8 +465,43 @@ CatchData_NoSurvivals <- catch.no*catch.mean.weight
 asum_Survivors$CatchObsSurv <- rowSums(CatchData_NoSurvivals)
 
 
-# Add survivors to forecast catches ----
-ForcTable$`survCatch:median` <- ForcTable$`catch:median`/(1-survCatchFrac)
+# Add survivors to forecast catches (discard rates applied as fractions of mass, not fraction of number ----
+# Surviving discard fractions from discards and total catch - from DataCoordination Lowestoft file
+deadCatchNo<-read.ices("Assessment Input/StockAnnex/cn_mid.dat")/1000
+deadcatchMeanWeight<-read.ices('Assessment Input/StockAnnex/cw_mid.dat')
+deadDisMeanWeight<-read.ices('Assessment Input/StockAnnex/dw_mid.dat')
+deaddf<- 1-read.ices('Assessment Input/StockAnnex/lf_mid_frac.dat')
+totCatchNo <- read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/cn.dat")/1000
+totcatchMeanWeight <- read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/cw.dat")
+totdisMeanWeight <- read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/dw.dat")
+totdf <- 1-read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/lf_frac.dat")
+
+## Mass of catch components
+deadCatchMass <- deadCatchNo*deadcatchMeanWeight
+totCatchMass <- totCatchNo*totcatchMeanWeight
+totDisMass <- totdisMeanWeight*totdf*totCatchNo
+deadDisMass <- deadDisMeanWeight*deaddf*deadCatchNo
+
+## Proportion of catch surviving
+survCatchMassFrac <- (totCatchMass-deadCatchMass)/totCatchMass
+
+## Proportion of discards surviving
+survDisMassFrac <- (totDisMass-deadDisMass)/totDisMass
+
+## Calculate Catch survival rates for all ages combined in DataYear
+### Boil down to one number per year using masses, not numbers.
+cutage<-1
+low<-1
+GE1<-which(as.numeric(colnames(totCatchMass))>=cutage)
+E1<-which(as.numeric(colnames(totCatchMass))==cutage)
+w1<-totCatchMass[,GE1]/rowSums(totCatchMass[,GE1])
+
+catFracTot <- survCatchMassFrac
+catFracTot[,E1]<-rowSums(survCatchMassFrac[,GE1]*w1)
+catFracTot<-catFracTot[,low:E1]
+
+### Add survivors back to forecast catch
+ForcTable$`survCatch:median` <- ForcTable$`catch:median`/(1-catFracTot)
 ForcTable$`survCatch:low`<- ForcTable$`catch:low`+(ForcTable$`survCatch:median`-ForcTable$`catch:median`)
 ForcTable$`survCatch:high` <- ForcTable$`catch:high`+(ForcTable$`survCatch:median`-ForcTable$`catch:median`)
 ```

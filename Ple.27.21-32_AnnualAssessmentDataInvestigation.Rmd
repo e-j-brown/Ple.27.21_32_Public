@@ -80,6 +80,7 @@ require(ggplot2)
 require(ggthemes)
 require(plotly)
 require(icesAdvice)
+require("stockassessment") # available from https://github.com/fishfollower/SAM
 require(sf)
 
 myprop <- function(df, nomo = "nomo", NoAtLngt = "CANoAtLngt"){
@@ -995,104 +996,189 @@ IC_agg_temp <- droplevels(IC_agg_temp)
 
 IC_agg_temp <- data.frame(Subdivision = c("SD 21", "SDs 22-32"),
                           `Catch 2024` = c(sum(IC_agg_temp[IC_agg_temp$Area == "27.3.a.21", "CATON"]), sum(IC_agg_temp[IC_agg_temp$Area != "27.3.a.21", "CATON"])),
-                          `Landings 2024` = c(sum(IC_agg_temp[IC_agg_temp$Area == "27.3.a.21" & IC_agg_temp$CatchCategory == "Landings", "CATON"]), sum(IC_agg_temp[IC_agg_temp$Area != "27.3.a.21" & IC_agg_temp$CatchCategory == "Landings", "CATON"])))
+                          `Landings 2024` = c(sum(IC_agg_temp[IC_agg_temp$Area == "27.3.a.21" & IC_agg_temp$CatchCategory == "Landings", "CATON"]), sum(IC_agg_temp[IC_agg_temp$Area != "27.3.a.21" & IC_agg_temp$CatchCategory == "Landings", "CATON"])),
+                          `Discards 2024` = c(sum(IC_agg_temp[IC_agg_temp$Area == "27.3.a.21" & IC_agg_temp$CatchCategory %in% c("BMS", "Discards"), "CATON"]), sum(IC_agg_temp[IC_agg_temp$Area != "27.3.a.21" & !IC_agg_temp$CatchCategory %in% c("BMS", "Discards"), "CATON"])))
 
 
 kable(IC_agg_temp,
-      caption = paste0("Catches and landings by management area in ", DataYear, " (tonnes). _Used for the stock splitting table_."),
+      caption = paste0("Catches and landings by management area in ", DataYear, " (tonnes). _Used for the stock splitting and history tables_."),
       digits = 2)
 ```
 
+```{r survivingDiscardRates}
+# Surviving discard fractions from discards and total catch - from DataCoordination Lowestoft file
+deadCatchNo<-read.ices("Assessment Input/StockAnnex/cn_mid.dat")/1000
+deadcatchMeanWeight<-read.ices('Assessment Input/StockAnnex/cw_mid.dat')
+deadDisMeanWeight<-read.ices('Assessment Input/StockAnnex/dw_mid.dat')
+deaddf<- 1-read.ices('Assessment Input/StockAnnex/lf_mid_frac.dat')
+totCatchNo <- read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/cn.dat")/1000
+totcatchMeanWeight <- read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/cw.dat")
+totdisMeanWeight <- read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/dw.dat")
+totdf <- 1-read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/lf_frac.dat")
 
-- The catch from all subdivisions combined in `r (DataYear)` was `r sum(ic_clean[ic_clean$Year == DataYear, "CATON"])` tonnes.  
-- The landings from subdivisions 21, 22 & 23 combined in `r (DataYear)` was `r sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Landings", "CATON"])` tonnes.  
+## Mass of catch components
+deadCatchMass <- deadCatchNo*deadcatchMeanWeight
+totCatchMass <- totCatchNo*totcatchMeanWeight
+totDisMass <- totdisMeanWeight*totdf*totCatchNo
+deadDisMass <- deadDisMeanWeight*deaddf*deadCatchNo
+
+## Proportion of catch surviving
+survCatchMassFrac <- (totCatchMass-deadCatchMass)/totCatchMass
+
+## Proportion of discards surviving
+survDisMassFrac <- (totDisMass-deadDisMass)/totDisMass
+
+## Calculate Catch survival rates for all ages combined in DataYear
+### Boil down to one number per year using masses, not numbers.
+cutage<-1
+low<-1
+GE1<-which(as.numeric(colnames(totCatchMass))>=cutage)
+E1<-which(as.numeric(colnames(totCatchMass))==cutage)
+w1<-totCatchMass[,GE1]/rowSums(totCatchMass[,GE1])
+
+catFracTot <- survCatchMassFrac
+catFracTot[,E1]<-rowSums(survCatchMassFrac[,GE1]*w1)
+catFracTot<-catFracTot[,low:E1]
+
+## Calculate discard survival rates for all ages combined in DataYear
+### Boil down to one number per year using masses, not numbers.
+GE2<-which(as.numeric(colnames(totDisMass))>=cutage)
+E2<-which(as.numeric(colnames(totDisMass))==cutage)
+w2<-totDisMass[,GE2]/rowSums(totDisMass[,GE2])
+
+disSurvTot <- survDisMassFrac
+disSurvTot[,E2]<-rowSums(survDisMassFrac[,GE2]*w2)
+disSurvTot<-disSurvTot[,low:E2]
+
+
+
+```
+
+- The catch from all subdivisions combined in `r (DataYear)` was `r sum(ic_clean[ic_clean$Year == DataYear & !ic_clean$CatchCategory %in% c("BMS landing","Logbook Registered Discard"), "CATON"])` tonnes.
+  - The percentage of the total catch that were either landed or dead discards, in `r DataYear`, was `r paste0(100-(round(unname(catFracTot[names(catFracTot) == DataYear])*100, 2)), "%")`, by mass.
+  - The percentage of the total catch that were surviving discards, in `r DataYear`, was `r paste0(round(unname(catFracTot[names(catFracTot) == DataYear])*100, 2), "%")`, by mass.
+- The landings from all subdivisions combined in `r (DataYear)` was `r sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Landings", "CATON"])` tonnes.  
   - The percentage of landings that were taken in _active_ gears was `r ((sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Landings" & ic_clean$Fleet == "Active", "CATON"]))/(sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Landings", "CATON"])))*100`%. 
   - The percentage of landings that were taken in _passive_ gears was `r ((sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Landings" & ic_clean$Fleet == "Passive", "CATON"]))/(sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Landings", "CATON"])))*100`%.  
-- The discards from subdivisions 21, 22 & 23 combined in `r (DataYear)` was `r sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory == "Discards", "CATON"])` tonnes.  
+- The discards from all subdivisions combined in `r (DataYear)` was `r sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Discards", "BMS"), "CATON"])` tonnes.  
+  - Of these discards, `r paste0(100-(round(unname(disSurvTot[names(disSurvTot) == DataYear])*100, 2)), "%")`, by mass, were considered dead.
+  - Of these discards, `r paste0(round(unname(disSurvTot[names(disSurvTot) == DataYear])*100, 2), "%")`, by mass, were considered to have survived.
 
-The _History of commercial catch and landings_ table in the advice sheet requires that BMS official landings are subtracted from the discard values. _Need to determine the advice sheet resolution requirements (by stock, by management area, by subdivision etc.) before reworking this code to fit._
-```{r manualCatchCalcs, eval=FALSE}
+
+The _History of commercial catch and landings_ table in the advice sheet requires that BMS official landings are subtracted from the discard values. 
+```{r manualCatchCalcs, eval=TRUE}
 #===
-# Aggregate and format Landings and Discards
-#====
-IC_agg_temp <- aggregate(CATON~Area+CatchCategory+Country, data = ic_clean[ic_clean$Year == DataYear, ], FUN = "sum")
-adctchtble <- reshape(data = IC_agg_temp[IC_agg_temp$CatchCategory %in% c("Landings", "Discards"),], direction = "wide",
-                      timevar = "Area",
-                      idvar = c("CatchCategory", "Country"))
-# adctchtble[is.na(adctchtble$CATON.27.3.a.21), "CATON.27.3.a.21"] <- 0
-# adctchtble[is.na(adctchtble$CATON.27.3.b.23), "CATON.27.3.b.23"] <- 0
-# adctchtble[is.na(adctchtble$CATON.27.3.c.22), "CATON.27.3.c.22"] <- 0
-adctchtble <- data.table::transpose(adctchtble)
-colnames(adctchtble) <- c("DK_Discards", "DK_Landings", "DE_Discards", "DE_Landings", "SK_Discards", "SK_Landings")
-adctchtble <- adctchtble[3:5, ]
-adctchtble <- as.data.frame(lapply(adctchtble, FUN = "as.numeric"))
-#====
+# Aggregate and format Landings and Discards for Named Countries & "Others"
+#===
+IC_agg_temp <- ic_clean
+IC_agg_temp[IC_agg_temp$CatchCategory %in% c("BMS landing"), "CATON"] <- IC_agg_temp[ic_clean$CatchCategory == "BMS landing", "OfficialLandings.kg"]/1000
+IC_agg_temp[IC_agg_temp$CatchCategory %in% c("BMS landing"), "CatchCategory"] <- "BMS"
+
+IC_agg_temp1 <- aggregate(CATON~MgmtArea+CatchCategory+Year, data = IC_agg_temp[!IC_agg_temp$Country %in% c("Denmark", "Sweden", "Germany", "Poland"), ], FUN = "sum")
+IC_agg_temp1$Country <- rep("Other", nrow(IC_agg_temp1))
+
+IC_agg_temp <- aggregate(CATON~MgmtArea+CatchCategory+Country+Year, data = IC_agg_temp[IC_agg_temp$Country %in% c("Denmark", "Sweden", "Germany", "Poland"), ], FUN = "sum")
+IC_agg_temp <- rbind(IC_agg_temp, IC_agg_temp1)
+
+IC_agg_temp$CountryCatch <- paste0(IC_agg_temp$Country, "_", IC_agg_temp$CatchCategory)
+IC_agg_temp <- IC_agg_temp[IC_agg_temp$CatchCategory %in% c("Landings", "Discards", "BMS"), c("Year", "MgmtArea", "CountryCatch", "CATON")]
+
+# #===
+# # Aggregate and format BMS Landings for all countries combined
+# #===
+# IC_agg_temp2 <- ic_clean[ic_clean$CatchCategory %in% c("BMS landing", "BMS"), ]
+# IC_agg_temp2[IC_agg_temp2$CatchCategory == "BMS landing", "CATON"] <- IC_agg_temp2[IC_agg_temp2$CatchCategory == "BMS landing", "OfficialLandings.kg"]/1000
+# IC_agg_temp2 <- aggregate(CATON~MgmtArea+Year+,
+#                          data = IC_agg_temp2,
+#                          FUN = "sum")
+# IC_agg_temp2$CountryCatch <- rep("BMS", nrow(IC_agg_temp2))
+# 
+# #===
+# # Combine Country/catch categories and reshape to wide
+# #===
+# IC_agg_temp <- rbind(IC_agg_temp, IC_agg_temp2)
+
+adctchtble <- reshape(data = IC_agg_temp,
+                      direction = "wide",
+                      timevar = c("CountryCatch"),
+                      idvar = c("MgmtArea", "Year"))
+
+# adctchtble <- as.data.frame(lapply(adctchtble, FUN = "as.numeric"))
+#===
 
 #===
-# Aggregate and format BMS Landings
+# subtract BMS from Discards & Restructure
 #====
-IC_agg_temp1 <- aggregate(OfficialLandings.kg~Area+CatchCategory+Country, data = ic_clean[ic_clean$Year == DataYear, ], FUN = "sum")
-adbmstble <- reshape(data = IC_agg_temp1[IC_agg_temp1$CatchCategory %in% c("BMS landing"), ], direction = "wide",
-                      timevar = "Area",
-                      idvar = c("CatchCategory", "Country"))
-
-# adbmstble[is.na(adbmstble$OfficialLandings.kg.27.3.a.21), "OfficialLandings.kg.27.3.a.21"] <- 0
-# adbmstble[is.na(adbmstble$OfficialLandings.kg.27.3.b.23), "OfficialLandings.kg.27.3.b.23"] <- 0
-# adbmstble[is.na(adbmstble$OfficialLandings.kg.27.3.c.22), "OfficialLandings.kg.27.3.c.22"] <- 0
-adbmstble <- data.table::transpose(adbmstble)
-colnames(adbmstble) <- c("DK_BMS", "DE_BMS", "SK_BMS")
-adbmstble <- adbmstble[3:5, ]
-adbmstble <- as.data.frame(lapply(adbmstble, FUN = "as.numeric"))
-
-## Convert from kg to tonnes
-adbmstble <- adbmstble/1000
-#=====
-#===
-# Combine, subtract BMS from Discards & Restructure
-#====
-## Combine
-adctchtble <- cbind(adctchtble, adbmstble)
-
-## Replace NAs with zeros for accurate arithmetic
-adctchtble[is.na(adctchtble)] <- 0
-
 ## Subtract BMS from discards
-adctchtble$DK_Discards <- adctchtble$DK_Discards - adctchtble$DK_BMS
-adctchtble$DE_Discards <- adctchtble$DE_Discards - adctchtble$DE_BMS
-adctchtble$SK_Discards <- adctchtble$SK_Discards - adctchtble$SK_BMS
+adctchtble$CATON.Denmark_Discards <- ifelse(is.na(adctchtble$CATON.Denmark_Discards),
+                                             0 - ifelse(is.na(adctchtble$CATON.Denmark_BMS), 0,
+                                                        adctchtble$CATON.Denmark_BMS),
+                                             adctchtble$CATON.Denmark_Discards - ifelse(is.na(adctchtble$CATON.Denmark_BMS), 0,
+                                                                                        adctchtble$CATON.Denmark_BMS)
+                                             )
+adctchtble$CATON.Germany_Discards <- ifelse(is.na(adctchtble$CATON.Germany_Discards),
+                                             0 - ifelse(is.na(adctchtble$CATON.Germany_BMS), 0,
+                                                        adctchtble$CATON.Germany_BMS),
+                                             adctchtble$CATON.Germany_Discards - ifelse(is.na(adctchtble$CATON.Germany_BMS), 0,
+                                                                                        adctchtble$CATON.Germany_BMS)
+                                             )
+adctchtble$CATON.Sweden_Discards <- ifelse(is.na(adctchtble$CATON.Sweden_Discards),
+                                             0 - ifelse(is.na(adctchtble$CATON.Sweden_BMS), 0,
+                                                        adctchtble$CATON.Sweden_BMS),
+                                             adctchtble$CATON.Sweden_Discards - ifelse(is.na(adctchtble$CATON.Sweden_BMS), 0,
+                                                                                        adctchtble$CATON.Sweden_BMS)
+                                             )
+adctchtble$CATON.Poland_Discards <- ifelse(is.na(adctchtble$CATON.Poland_Discards),
+                                             0 - ifelse(is.na(adctchtble$CATON.Poland_BMS), 0,
+                                                        adctchtble$CATON.Poland_BMS),
+                                             adctchtble$CATON.Poland_Discards - ifelse(is.na(adctchtble$CATON.Poland_BMS), 0,
+                                                                                        adctchtble$CATON.Poland_BMS)
+                                             )
+adctchtble$CATON.Other_Discards <- ifelse(is.na(adctchtble$CATON.Other_Discards),
+                                             0 - ifelse(is.na(adctchtble$CATON.Other_BMS), 0,
+                                                        adctchtble$CATON.Other_BMS),
+                                             adctchtble$CATON.Other_Discards - ifelse(is.na(adctchtble$CATON.Other_BMS), 0,
+                                                                                        adctchtble$CATON.Other_BMS)
+                                             )
 
-## Calculate total catch
-IC_agg_temp <- aggregate(CATON~Area, data = ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Landings", "Discards"), ], FUN = "sum")
-adctchtble$TotalCatch <- IC_agg_temp$CATON
+## Calculate total BMS and catch
+adctchtble$BMS <- rowSums(adctchtble[, grepl("BMS", colnames(adctchtble))],na.rm = TRUE)
+adctchtble <- adctchtble[, !grepl("_BMS", colnames(adctchtble))]
 
-## Add subdivision information
-adctchtble$Subdivision <- unique(IC_agg_temp$Area)
-
-## Aggregate BMS across all countries
-adctchtble$BMS <- rowSums(adctchtble[, c("DK_BMS", "DE_BMS", "SK_BMS")], na.rm = TRUE)
-
-## Reformat
-adctchtble <- adctchtble[, c("Subdivision", "DK_Discards", "DK_Landings", "DE_Discards", "DE_Landings",  "SK_Discards", "SK_Landings", "BMS", "TotalCatch")]
+adctchtble$TotalCatch <- rowSums(adctchtble[, !names(adctchtble) %in% c("Year", "MgmtArea")], na.rm = TRUE)
 #=====
 
 #===
 # Add Annual Totals
 #====
-tots <- adctchtble[0,]
-for(i in 2:ncol(tots)){
-  tots[1,i] <- sum(adctchtble[, i], na.rm = TRUE)
-}
-tots$Subdivision <- as.character(DataYear)
+ad_tmp <- aggregate(. ~ Year, data = adctchtble[, sapply(adctchtble, is.numeric) | names(adctchtble) == "Year"],
+                    FUN = function(x) if (all(is.na(x))) NA else sum(x, na.rm = TRUE), na.action = na.pass)
+ad_tmp$MgmtArea <- "Areas Combined"
+adctchtble <- rbind(adctchtble,ad_tmp)
 
-adctchtble <- rbind(tots, adctchtble)
-rownames(adctchtble) <- NULL
 #=====
+
+#===
+# Do formating
+#===
+adctchtble$MgmtArea <- ifelse(adctchtble$MgmtArea == "BalticSea", "Baltic Sea",
+                              ifelse(adctchtble$MgmtArea == "NorthSea", "North Sea",
+                                     ifelse(adctchtble$MgmtArea == "Areas Combined", "Areas Combined",
+                                            NA)))
+adctchtble$MgmtArea <- factor(adctchtble$MgmtArea, levels=)
+adctchtble <- adctchtble[order(adctchtble$Year, adctchtble$MgmtArea), ]
+
+eround <- function(y) sapply(y, function(x) if (is.na(x)) "" else if (x<1 & x>0) "<1" else round(x, 0))
+adctchtble[, !names(adctchtble) %in% c("Year", "MgmtArea")] <- lapply(adctchtble[, !names(adctchtble) %in% c("Year", "MgmtArea")], FUN = eround)
+rownames(adctchtble) <- NULL
+
+
+#===
 
 
 
 kable(adctchtble,
-      caption = paste0("Official catch numbers by country and subdivision for ", DataYear, ".  Official landings of BMS have been subtracted from Discards. _can be copy-pasted into the advice sheet_."),
-      digits = 0)
+      caption = paste0("Official catch numbers by country and management area for 2002-", DataYear, ".  Official landings of BMS have been subtracted from Discards. _can be copy-pasted into the advice sheet_."))
 
 ```
 
@@ -1122,6 +1208,14 @@ rownames(catchSAG) <- NULL
 
 kable(catchSAG,
       caption = paste0("Catches by catch category (tonnes). _Used for the catches in SAG, surviving discards as custom series_."),
+      digits = 2)
+```
+
+```{r historyAdviceCatchManagement, eval=TRUE}
+
+
+kable(catchSAG,
+      caption = paste0("Catches by catch category (tonnes) and percentages surviving. _-Used for the \"History of the advice, catch, and management\" section of the advice sheet_."),
       digits = 2)
 ```
 
