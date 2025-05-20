@@ -81,6 +81,23 @@ catchFrac <- function(x, nm, w, frac){
   C <- F/Z*(1-exp(-Z))*N
   return(sum(frac*w*C))
 }
+
+nftab<-function(forecast){
+  mat<-t(sapply(forecast, function(yr)exp(apply(yr$sim,2,median))))
+  minA<-attr(forecast, "fit")$conf$minAge
+  maxA<-attr(forecast, "fit")$conf$maxAge
+  matN<-mat[,(minA:maxA)-minA+1]
+  matF<-mat[,-c((minA:maxA)-minA+1)]  
+  yr<-sapply(forecast,function(f)f$year)
+  colnames(matN)<-paste0("N",minA:maxA)
+  idx <- attr(forecast,"fit")$conf$keyLogFsta[1, ] + 2
+  matF <- cbind(NA, matF)[, idx]
+  matF[, idx == 1] <- 0
+  colnames(matF)<-paste0("F",minA:maxA)
+  res<-cbind(matN,matF)
+  rownames(res)<-yr
+  return(res)
+}
 ```
 
 We also need to set a few variables manually.  
@@ -140,6 +157,71 @@ colnames(asum_CURRENT) <- c("Year", "R_age1", "Rlow", "Rhigh", "SSB", "SSBlow", 
 #=====
 ```
 
+```{r DisRateMass}
+
+# Discard rates applied as fractions of number ----
+survfrac <- read.ices("Assessment Input/StockAnnex/df_frac.dat")
+survfracTotal <- survfrac
+## Cutdown ages of input data to 7+ group
+catch.no <- read.ices("Assessment Input/StockAnnex/cn_mid.dat")/1000
+cutage <- 7
+low <- 1
+GE <- which(as.numeric(colnames(catch.no)) >= cutage)
+E <- which(as.numeric(colnames(catch.no)) == cutage)
+w <- catch.no[, GE]/rowSums(catch.no[, GE])
+wex <- rbind(w, w[nrow(w), ])
+### Calculate discard survival rate by age for 1 -> 7
+survfrac[, E] <- rowSums(survfrac[, GE] * w)
+survfrac <- survfrac[, low:E]
+
+## Weighted means of surviving fraction by number, collapsing age to give an individual number per year
+cutage <- 1
+low <- 1
+GE1 <- which(as.numeric(colnames(catch.no)) >= cutage)
+E1 <- which(as.numeric(colnames(catch.no)) == cutage)
+w1 <- catch.no[, GE1]/rowSums(catch.no[, GE1])
+wex1 <- rbind(w1, w1[nrow(w1), ])
+### Calculate discard survival rate by numbers, collapsed ages for all years
+survfracTotal[, E1] <- rowSums(survfracTotal[, GE1] * w1)
+survfracTotal <- survfracTotal[, low:E1]
+
+# Discard rates applied as fractions of mass, not fraction of number ----
+deadCatchNo<-read.ices("Assessment Input/StockAnnex/cn_mid.dat")/1000
+deadcatchMeanWeight<-read.ices('Assessment Input/StockAnnex/cw_mid.dat')
+deadDisMeanWeight<-read.ices('Assessment Input/StockAnnex/dw_mid.dat')
+deaddf<- 1-read.ices('Assessment Input/StockAnnex/lf_mid_frac.dat')
+totCatchNo <- read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/cn.dat")/1000
+totcatchMeanWeight <- read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/cw.dat")
+totdisMeanWeight <- read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/dw.dat")
+totdf <- 1-read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/lf_frac.dat")
+
+## Mass of catch components
+deadCatchMass <- deadCatchNo*deadcatchMeanWeight
+totCatchMass <- totCatchNo*totcatchMeanWeight
+totDisMass <- totdisMeanWeight*totdf*totCatchNo
+deadDisMass <- deadDisMeanWeight*deaddf*deadCatchNo
+allCatchMass <- rowSums(totCatchMass)
+
+## Proportion of catch surviving
+survCatchMassFrac <- (totCatchMass-deadCatchMass)/totCatchMass
+
+## Proportion of discards surviving
+survDisMassFrac <- (totDisMass-deadDisMass)/totDisMass
+
+## Calculate Catch survival rates for all ages combined in DataYear
+### Boil down to one number per year using masses, not numbers.
+cutage<-1
+low<-1
+GE1<-which(as.numeric(colnames(totCatchMass))>=cutage)
+E1<-which(as.numeric(colnames(totCatchMass))==cutage)
+w1<-totCatchMass[,GE1]/rowSums(totCatchMass[,GE1])
+
+catFracTot <- survCatchMassFrac
+catFracTot[,E1]<-rowSums(survCatchMassFrac[,GE1]*w1)
+catFracTot<-catFracTot[,low:E1]
+
+```
+
 # Short Term Forecast Scenarios
 ## Forecast configurations
 Short term forecasts are run for a number of different scenarios according to different forms of catch advice that have been requested in the past, or may be relevant in various scenarios.   
@@ -155,6 +237,8 @@ nruns <- ifelse(isFinal, 50000, 5000)
 bioAveYears <- 3
 bay <- bioAveYears-2
 recyears <- 2002:DataYear
+catSurvFracAve <- mean(catFracTot[(length(catFracTot)-(bioAveYears-1)):length(catFracTot)])
+
 FC <- list()
 ```
 
@@ -185,7 +269,8 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                rec.years=recyears,
                                year.base=DataYear,
                                splitLD=TRUE,
-                               nosim=50000)
+                               nosim=50000,
+                               savesim = TRUE)
 
 ```
 
@@ -200,7 +285,8 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                rec.years=recyears,
                                year.base=DataYear,
                                splitLD=TRUE,
-                               nosim=nruns)
+                               nosim=nruns,
+                               savesim = TRUE)
 ```
 
 ### Fmsy (lower)
@@ -214,7 +300,8 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                rec.years=recyears,
                                year.base=DataYear,
                                splitLD=TRUE,
-                               nosim=nruns)
+                               nosim=nruns,
+                               savesim = TRUE)
 
 ```
 
@@ -229,7 +316,8 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                rec.years=recyears,
                                year.base=DataYear,
                                splitLD=TRUE,
-                               nosim=nruns)
+                               nosim=nruns,
+                               savesim = TRUE)
 
 ```
 
@@ -243,7 +331,8 @@ FC[[length(FC)+1]] <- forecast(fit=fit_CURRENT,
                                rec.years=recyears,
                                year.base=DataYear,
                                splitLD=TRUE,
-                               nosim=nruns)  
+                               nosim=nruns,
+                               savesim = TRUE)  
 
 ```
 
@@ -258,7 +347,8 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                               rec.years=recyears,
                               year.base=DataYear,
                               splitLD=TRUE,
-                              nosim=nruns)
+                              nosim=nruns,
+                               savesim = TRUE)
 ```
 
 ### Fishing at Flim
@@ -272,7 +362,8 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                rec.years=recyears,
                                year.base=DataYear,
                                splitLD=TRUE,
-                               nosim=nruns)
+                               nosim=nruns,
+                               savesim = TRUE)
 
 ```
 
@@ -287,7 +378,8 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                rec.years=recyears,
                                year.base=DataYear,
                                nosim=nruns,
-                               splitLD=TRUE)
+                               splitLD=TRUE,
+                               savesim = TRUE)
 
 ```
 
@@ -302,7 +394,8 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                rec.years=recyears,
                                year.base=DataYear,
                                nosim=nruns,
-                               splitLD=TRUE)
+                               splitLD=TRUE,
+                               savesim = TRUE)
 ```
 
 ### Target SSB in two years equal to Blim
@@ -316,7 +409,8 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                rec.years=recyears,
                                year.base=DataYear,
                                nosim=nruns,
-                               splitLD=TRUE)
+                               splitLD=TRUE,
+                               savesim = TRUE)
 ```
 
 ### Target SSB in two years is the same as forecast for advice year
@@ -332,7 +426,8 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                rec.years=recyears,
                                year.base=DataYear,
                                nosim=nruns,
-                               splitLD=TRUE)
+                               splitLD=TRUE,
+                               savesim = TRUE)
 ```
 
 ### Catch at or below a 20% increase in advice for interim year
@@ -340,13 +435,16 @@ FC[[length(FC)+1]] <- forecast(fit_CURRENT,
 set.seed(12345)
 FC[[length(FC)+1]] <- forecast(fit_CURRENT,
                                fscale=c(1,1,NA,NA),
-                               catchval=c(NA,NA,(LastIcesAdvice*1.2),(LastIcesAdvice*1.2)),
-                               label=paste0("Catch(", DataYear+2, ")<=20% Advice(", DataYear+1, ")"),
+                               catchval=c(NA,NA,
+                                          unname(LastIcesAdvice-(LastIcesAdvice*catFracTot[length(catFracTot)]))*1.2,
+                                          unname(LastIcesAdvice-(LastIcesAdvice*catFracTot[length(catFracTot)]))*1.2), 
+                               label=paste0("Catch(", DataYear+2, ")<=20% Advice(", DataYear+1, ")[Discard Survival(", DataYear, ")]"),
                                ave.years=(DataYear-bay):(DataYear+1),
                                rec.years=recyears,
                                year.base=DataYear,
                                splitLD=TRUE,
-                               nosim=nruns)
+                               nosim=nruns,
+                               savesim = TRUE)
 ```
 
 ```{r Forecasts_aggregate}
@@ -369,6 +467,13 @@ ForcTable <- rbind(ForcTable, tft)
 
 ForcTable <- ForcTable[, c(ncol(ForcTable)-1, ncol(ForcTable), 1:(ncol(ForcTable)-2))]
 rownames(ForcTable) <- NULL
+
+below<-function(x){xx<-mean(x[[4]]$ssb<Blim);yr<-x[[4]]$year; round(xx*100,1)}
+Pbelow<-lapply(FC, below)
+names(Pbelow)<-lapply(FC, function(x){attr(x,"label")})
+Pbelow<-as.matrix(unlist(Pbelow))
+colnames(Pbelow)<-paste0("P(SSB",FC[[1]][[4]]$year, " < ",Blim,") in %")
+
 ```
 
 # Adding Surviving Discards to Forecast Catches
@@ -379,78 +484,13 @@ The assessment model is then run with only landings and "dead discards", contrib
 
 ```{r forecastSurvivors, eval=TRUE}
 # Add survivors back to model estimations ----
-# Surviving discard fractions from discards and total catch - from DataCoordination Lowestoft file
-survfrac <- read.ices("Assessment Input/StockAnnex/df_frac.dat")
-survCatchFrac <- read.ices("Assessment Input/StockAnnex/cn_frac.dat")
-
-## Cutdown ages of input data to 7+ group
-catch.no<-read.ices("Assessment Input/StockAnnex/cn_mid.dat")/1000
-cutage<-7
-low<-1
-GE<-which(as.numeric(colnames(catch.no))>=cutage)
-E<-which(as.numeric(colnames(catch.no))==cutage)
-w<-catch.no[,GE]/rowSums(catch.no[,GE])
-wex<-rbind(w,w[nrow(w),])
-
-## Calculate discard survival rate by age for 1 -> 7
-survfrac[,E]<-rowSums(survfrac[,GE]*w)
-survfrac<-survfrac[,low:E]
-
-## Boil down to one number per year
-cutage<-1
-low<-1
-GE1<-which(as.numeric(colnames(catch.no))>=cutage)
-E1<-which(as.numeric(colnames(catch.no))==cutage)
-w1<-catch.no[,GE1]/rowSums(catch.no[,GE1])
-
-## Calculate CATCH survival rate for all ages, by number, in recent years (specified by bioAveYears)
-survCatchFrac[,E1]<-rowSums(survCatchFrac[,GE1]*w1)
-survCatchFrac <- mean(survCatchFrac[(nrow(survCatchFrac)-bioAveYears):nrow(survCatchFrac),low:E1])
-
-## Landings and DEAD Discards combined
-dcn_CURRENT <- caytable(fit_CURRENT)[!rownames(caytable(fit_CURRENT)) %in% (DataYear+1), ]
-## DEAD discard numbers at age from model
-ddcn_CURRENT <- dcn_CURRENT*(1-fit_CURRENT$data$landFrac[, , "Residual catch"])
-## TOTAL discard numbers at age
-adcn_CURRENT <- ddcn_CURRENT/(1-survfrac)
-## SURVIVING discard numbers at age
-sdcn_CURRENT <- adcn_CURRENT*survfrac
-
-# Add SURVIVING discards back to DEAD catch numbers at age from the model
-cn_CURRENT <- dcn_CURRENT+sdcn_CURRENT
-
-# Calculate catches (tonnes) by age using mean weights over time
-## Dead discards
-ddcaton_CURRENT <- ddcn_CURRENT*fit_CURRENT$data$disMeanWeight[, , "Residual catch"]
-## All Discards
-adcaton_CURRENT <- adcn_CURRENT*fit_CURRENT$data$disMeanWeight[, , "Residual catch"]
-## Landings only
-lcaton_CURRENT <- (dcn_CURRENT-ddcn_CURRENT)*fit_CURRENT$data$landMeanWeight[, , "Residual catch"]
-## Totals with only DEAD discards
-dtcaton_CURRENT <- ddcaton_CURRENT+lcaton_CURRENT
-## Totals with ALL Discards
-caton_CURRENT <- adcaton_CURRENT+lcaton_CURRENT
-caton_CURRENT_Check <- cn_CURRENT*fit_CURRENT$data$catchMeanWeight[, , "Residual catch"]
-
-## Extract estimates from catchTable
-fit_summary <- catchtable(fit_CURRENT)
-
-## Total DEAD catch mass, all ages summed, from calcs using discards and landings independently
-dlCatchEst <- rowSums(dtcaton_CURRENT)
-## Total DEAD & SURVIVING catch mass, all ages summed, from calcs using discards and landings independently
-sdlCatchEst <- rowSums(caton_CURRENT)
-
-## Total catch mass, all ages summed, from cayTable*cw
-CatchEst <- rowSums(dcn_CURRENT*fit_CURRENT$data$catchMeanWeight[, , "Residual catch"])
-
-# Create new ASUM with survivors added back ----
 ## Initialise new ASUM
 asum_Survivors <- asum_CURRENT[asum_CURRENT$Year != (DataYear+1), ]
-asum_Survivors$CatchSurv <- unname(sdlCatchEst)
+asum_Survivors$CatchSurv <- unname(allCatchMass)
 asum_Survivors$CatchSurvHigh <- asum_Survivors$Catchhigh+(asum_Survivors$CatchSurv - asum_Survivors$CatchEst)
 asum_Survivors$CatchSurvLow <- asum_Survivors$Catchlow+(asum_Survivors$CatchSurv - asum_Survivors$CatchEst)
 
-## Pull in and clean full catch data
+## Re-extract Full Catch Observations
 catch.no<-read.ices('Assessment Input/AlternateModel_NoDiscardSurvival/cn.dat')/1000
 catch.mean.weight<-read.ices('Assessment Input/AlternateModel_NoDiscardSurvival/cw.dat')
 
@@ -464,44 +504,8 @@ CatchData_NoSurvivals <- catch.no*catch.mean.weight
 ## Add total catch observations back to new ASUM
 asum_Survivors$CatchObsSurv <- rowSums(CatchData_NoSurvivals)
 
-
-# Add survivors to forecast catches (discard rates applied as fractions of mass, not fraction of number ----
-# Surviving discard fractions from discards and total catch - from DataCoordination Lowestoft file
-deadCatchNo<-read.ices("Assessment Input/StockAnnex/cn_mid.dat")/1000
-deadcatchMeanWeight<-read.ices('Assessment Input/StockAnnex/cw_mid.dat')
-deadDisMeanWeight<-read.ices('Assessment Input/StockAnnex/dw_mid.dat')
-deaddf<- 1-read.ices('Assessment Input/StockAnnex/lf_mid_frac.dat')
-totCatchNo <- read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/cn.dat")/1000
-totcatchMeanWeight <- read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/cw.dat")
-totdisMeanWeight <- read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/dw.dat")
-totdf <- 1-read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/lf_frac.dat")
-
-## Mass of catch components
-deadCatchMass <- deadCatchNo*deadcatchMeanWeight
-totCatchMass <- totCatchNo*totcatchMeanWeight
-totDisMass <- totdisMeanWeight*totdf*totCatchNo
-deadDisMass <- deadDisMeanWeight*deaddf*deadCatchNo
-
-## Proportion of catch surviving
-survCatchMassFrac <- (totCatchMass-deadCatchMass)/totCatchMass
-
-## Proportion of discards surviving
-survDisMassFrac <- (totDisMass-deadDisMass)/totDisMass
-
-## Calculate Catch survival rates for all ages combined in DataYear
-### Boil down to one number per year using masses, not numbers.
-cutage<-1
-low<-1
-GE1<-which(as.numeric(colnames(totCatchMass))>=cutage)
-E1<-which(as.numeric(colnames(totCatchMass))==cutage)
-w1<-totCatchMass[,GE1]/rowSums(totCatchMass[,GE1])
-
-catFracTot <- survCatchMassFrac
-catFracTot[,E1]<-rowSums(survCatchMassFrac[,GE1]*w1)
-catFracTot<-catFracTot[,low:E1]
-
 ### Add survivors back to forecast catch
-ForcTable$`survCatch:median` <- ForcTable$`catch:median`/(1-catFracTot)
+ForcTable$`survCatch:median` <- ForcTable$`catch:median`/(1-catSurvFracAve)
 ForcTable$`survCatch:low`<- ForcTable$`catch:low`+(ForcTable$`survCatch:median`-ForcTable$`catch:median`)
 ForcTable$`survCatch:high` <- ForcTable$`catch:high`+(ForcTable$`survCatch:median`-ForcTable$`catch:median`)
 ```
@@ -518,27 +522,30 @@ intyear <- data.frame(Variable = c("F~ages 3-6~",
                                    paste0("Total catch (", (DataYear+1), ")"),
                                    paste0("Projected Landings (", (DataYear+1), ")"),
                                    paste0("Projected Discards (", (DataYear+1), ")"),
+                                   paste0("Discard Survival Rates (", (DataYear+1), ")"),
                                    paste0("Discard Survival Rate (", (DataYear+1), ")"),
                                    paste0("Projected Surviving Discards (", (DataYear+1), ")"),
                                    paste0("Projected Dead Discards (", (DataYear+1), ")")),
                       Value = c(asum_CURRENT[asum_CURRENT$Year == (DataYear),"Fbar"],
                                 ForcTable[ForcTable$Year == (DataYear+2) & ForcTable$scenario == "Fmsy", "ssb:median"],
                                 ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "rec:median"],
-                                ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "survCatch:median"],
+                                round(ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "survCatch:median"], 0),
                                 ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Land:median"],
-                                ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "survCatch:median"] -                                 ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Land:median"],
-                                paste(round(unname(colMeans(survfrac[(nrow(survfrac)-bioAveYears):nrow(survfrac),])), 2), collapse=", "),
-                                (ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "survCatch:median"] -                                 ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Land:median"]) - ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Discard:median"],
+                                round(ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "survCatch:median"] -                                 ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Land:median"], 0),
+                                paste(round(unname(colMeans(survfrac[(nrow(survfrac)-(bioAveYears-1)):nrow(survfrac),])), 2), collapse=", "),
+                                paste(icesRound(unname(mean(survfracTotal[(length(survfracTotal)-(bioAveYears-1)):length(survfracTotal)])))),
+                                round((ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "survCatch:median"] -                                 ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Land:median"]) - ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Discard:median"], 0),
                                 ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Discard:median"]),
                       Notes = c(paste0("F~ages 3-6~ in ", DataYear, "."),
                                 "Short-term forecast; tonnes.",
                                 paste0("Median resampled from the entire time series of recruitment (excluding latest year with only Q1 data ", (DataYear+1), "); thousands."),
                                 paste0("Short-term forecast using F(", (DataYear+1), "), plus surviving discards; tonnes."),
-                                paste0("Short-term forecast; assuming average landings pattern by age in ", (DataYear-bioAveYears), "-", DataYear, "; tonnes."),
-                                paste0("Short-term forecast; assuming average discard pattern and survival, by age, in ", (DataYear-bioAveYears), "-", DataYear, ", plus surviving discards; tonnes."),
-                                paste0("Survival rates in discards, by age (1-7), in ", (DataYear-bioAveYears), "-", DataYear, "."),
-                                paste0("Short-term forecast; assuming an average discard pattern and survival, by age, in ", (DataYear-bioAveYears), "-", DataYear, ", plus surviving discards; tonnes."),
-                                paste0("Short-term forecast; assuming an average discard pattern and survival, by age, in ", (DataYear-bioAveYears), "-", DataYear, ", plus surviving discards; tonnes.")
+                                paste0("Short-term forecast; assuming average landings pattern by age in ", (DataYear-(bioAveYears-1)), "-", DataYear, "; tonnes."),
+                                paste0("Short-term forecast; assuming average discard pattern and survival, by age, in ", (DataYear-(bioAveYears-1)), "-", DataYear, ", plus surviving discards; tonnes."),
+                                paste0("Survival rates in discards, by age (1-7), in ", (DataYear-(bioAveYears-1)), "-", DataYear, "."),
+                                paste0("Survival rate in discards, weighted mean by number across ages, and average over ", (DataYear-(bioAveYears-1)), "-", DataYear, "."),
+                                paste0("Short-term forecast; assuming an average discard pattern and survival, by age, in ", (DataYear-(bioAveYears-1)), "-", DataYear, ", plus surviving discards; tonnes."),
+                                paste0("Short-term forecast; assuming an average discard pattern and survival, by age, in ", (DataYear-(bioAveYears-1)), "-", DataYear, ", plus surviving discards; tonnes.")
                       )
 )
 
@@ -755,6 +762,7 @@ ggplotly(psurvcatch, tooltip = c("series", "x", "y"))
 
 Based on these scenarios, we can extract the relevant information to provide to managers as advice for setting TACs under various management regimes or contexts. 
 
+
 ```{r CatchOptionsTableDeads}
 cotable <- data.frame( a = character(),
                        b = integer(),
@@ -788,7 +796,7 @@ cotable[,5] <- icesRound(cotable[,5]*100, percent = TRUE, sign = FALSE)
 cotable[,6] <- icesRound(cotable[,6]*100, percent = TRUE, sign = FALSE)
 
 kable(cotable,
-      caption = "Catch Options Table formatted for advice sheet (ICES rounding rules applied)",
+      caption = "Catch Options Table; based on old ple.21-23 stock, formatted for advice sheet (ICES rounding rules applied)",
       col.names = gsub(x = colnames(cotable), pattern = "_", replacement = " "))
 
 # write.csv(cotable, file = paste0("Tables/Ple.27.21-23_CatchOptionsTable_", DataYear+1, ".csv"))
@@ -818,6 +826,8 @@ for(i in unique(ForcTable$scenario)){
   cotable <- rbind(cotable, data.frame(a, b, c, d, e, f, g, h))
 }
 
+cotable$pbelowBlim <- unname(Pbelow[, 1])
+
 colnames(cotable) <- c("Basis",
                        paste0("TotalCatch_",(DataYear+2)),
                        paste0("Projected Landings_", (DataYear+2)),
@@ -825,7 +835,9 @@ colnames(cotable) <- c("Basis",
                        paste0("Total F_", (DataYear+2)),
                        paste0("SSB_", (DataYear+3)),
                        paste0("%SSB_change_", (DataYear+3), "_cf_", (DataYear+2)),
-                       paste0("%ChangeAdvice_", (DataYear+2), "_cf_", (DataYear+1)))
+                       paste0("%ChangeAdvice_", (DataYear+2), "_cf_", (DataYear+1)),
+                       paste0("P SSB", (DataYear+3), " < Blim"))
+
 
 cotable[,2] <- round(cotable[,2])
 cotable[,3] <- round(cotable[,3])
@@ -834,6 +846,7 @@ cotable[,5] <- icesRound(cotable[,5])
 cotable[,6] <- round(cotable[,6])
 cotable[,7] <- icesRound(cotable[,7]*100, percent = TRUE, sign = FALSE)
 cotable[,8] <- icesRound(cotable[,8]*100, percent = TRUE, sign = FALSE)
+cotable[,9] <- round(cotable[,9], 0)
 
 kable(cotable,
       caption = "Catch Options Table (with Surviving Discards) formatted for advice sheet (ICES rounding rules applied)",
@@ -842,6 +855,3 @@ kable(cotable,
 # write.csv(cotable, file = paste0("Tables/Ple.27.21-23_CatchOptionsTable_", DataYear+1, ".csv"))
 
 ```
-
-# Splitting Advice for Management Areas
-This stock covers ICES subdivisions 21 to 32.  Subdivision 21 (Kattegat), falls under the North Sea Management area and, therefore, has its Total Allowable Catch determined independently of the rest of the stock.  In the past, when this stock was assessed as two components, independent assessments provided estimates of catches, landings and projected advice which were used to determine a splitting ration of said advice, based on the 

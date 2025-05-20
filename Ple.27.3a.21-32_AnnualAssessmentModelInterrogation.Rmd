@@ -81,6 +81,28 @@ catchFrac <- function(x, nm, w, frac){
   C <- F/Z*(1-exp(-Z))*N
   return(sum(frac*w*C))
 }
+
+apply_rounding <- function(df) {
+  # Iterate through each column in the dataframe
+  df[] <- lapply(df, function(col) {
+    if (is.numeric(col)) {
+      # Apply rounding rules to numeric columns
+      return(sapply(col, function(x) {
+        if (x < 0.2) {
+          round(x, 3)
+        } else if (x >= 0.2 && x < 1) {
+          round(x, 2)
+        } else {
+          round(x, 0)
+        }
+      }))
+    } else {
+      # Leave non-numeric columns unchanged
+      return(col)
+    }
+  })
+  return(df)
+}
 ```
 
 We also need to set a few variables manually.  
@@ -95,8 +117,8 @@ Finally, we set a few paths to be able to find and save stuff.
 ```{r prepFixedVariables}
 DataYear <- 2024
 LastIcesAdvice <- 25365 # Advised catch for areas 21-32 (from stock splitting table in advice)
-isFinal <- FALSE
-# isFinal <- TRUE
+# isFinal <- FALSE
+isFinal <- TRUE
 
 ## Reference points
 MSYBtrigger <- 13460
@@ -533,10 +555,10 @@ rownames(tabsum) <- NULL
 colnames(tabsum) <- c("R_age1", "RLow", "RHigh", "SSB", "SSBLow", "SSBHigh", "Fbar", "FLow", "FHigh", "TSB", "TSBLow", "TSBHigh", "Year")
 tabsum <- tabsum[, c("Year", "RLow", "R_age1", "RHigh", "TSBLow", "TSB", "TSBHigh",  "SSBLow", "SSB","SSBHigh", "FLow", "Fbar", "FHigh")]
 
+tabsum <- apply_rounding(tabsum)
 
 kable(tabsum,
-      caption = paste0("Estimated recruitment, spawning stock biomass (SSB), total stock biomass (TSB) and fishing mortality for ages 3-5 of ple.27.21-23."),
-      digits = 2) 
+      caption = paste0("Estimated recruitment, spawning stock biomass (SSB), total stock biomass (TSB) and fishing mortality for ages 3-5 of ple.27.21-23.")) 
 ```
 
 

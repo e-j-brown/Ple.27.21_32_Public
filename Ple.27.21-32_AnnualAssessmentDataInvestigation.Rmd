@@ -1063,7 +1063,8 @@ disSurvTot<-disSurvTot[,low:E2]
 - The discards from all subdivisions combined in `r (DataYear)` was `r sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Discards", "BMS"), "CATON"])` tonnes.  
   - Of these discards, `r paste0(100-(round(unname(disSurvTot[names(disSurvTot) == DataYear])*100, 2)), "%")`, by mass, were considered dead.
   - Of these discards, `r paste0(round(unname(disSurvTot[names(disSurvTot) == DataYear])*100, 2), "%")`, by mass, were considered to have survived.
-
+  - The percentage of total discards that were taken in _active_ gears was `r ((sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Discards", "BMS", "BMS landing") & ic_clean$Fleet == "Active", "CATON"]))/(sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Discards", "BMS", "BMS landing"), "CATON"])))*100`%. 
+  - The percentage of discards that were taken in _passive_ gears was `r ((sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Discards", "BMS", "BMS landing") & ic_clean$Fleet == "Passive", "CATON"]))/(sum(ic_clean[ic_clean$Year == DataYear & ic_clean$CatchCategory %in% c("Discards", "BMS", "BMS landing"), "CATON"])))*100`%.
 
 The _History of commercial catch and landings_ table in the advice sheet requires that BMS official landings are subtracted from the discard values. 
 ```{r manualCatchCalcs, eval=TRUE}
