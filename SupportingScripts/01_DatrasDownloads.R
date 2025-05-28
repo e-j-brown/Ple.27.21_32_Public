@@ -39,9 +39,13 @@ CA_ibts <- getDATRAS(record = "CA",
                 quarters = Q)
 
 ##  Save all as independent csv files - using rstudio project console
-write.csv(HH_ibts, file = paste0(savePath, "IBTS_HH_1965_", assYear, "_", Sys.Date(),".csv"), row.names = FALSE)
-write.csv(HL_ibts, file = paste0(savePath, "IBTS_HL_1965_", assYear, "_", Sys.Date(),".csv"), row.names = FALSE)
-write.csv(CA_ibts, file = paste0(savePath, "IBTS_CA_1965", assYear, "_", Sys.Date(),".csv"), row.names = FALSE)
+# write.csv(HH_ibts, file = paste0(savePath, "IBTS_HH_1965_", assYear, "_", Sys.Date(),".csv"), row.names = FALSE)
+# write.csv(HL_ibts, file = paste0(savePath, "IBTS_HL_1965_", assYear, "_", Sys.Date(),".csv"), row.names = FALSE)
+# write.csv(CA_ibts, file = paste0(savePath, "IBTS_CA_1965_", assYear, "_", Sys.Date(),".csv"), row.names = FALSE)
+
+write.csv(HH_ibts, file = paste0(savePath, "IBTS_HH_1965_AssYear_", Sys.Date(),".csv"), row.names = FALSE)
+write.csv(HL_ibts, file = paste0(savePath, "IBTS_HL_1965_AssYear_", Sys.Date(),".csv"), row.names = FALSE)
+write.csv(CA_ibts, file = paste0(savePath, "IBTS_CA_1965_AssYear_", Sys.Date(),".csv"), row.names = FALSE)
 
 # ##  Save all as independent csv files - using source as local job
 # write.csv(HH_ibts, file = "Surveys/exchange/IBTS_HH_1965_AssYear.csv", row.names = FALSE)
@@ -78,9 +82,13 @@ CA_bits <- getDATRAS(record = "CA",
                 quarters = Q)
 
 ##  Save all as independent csv files - run in rstudio project
-write.csv(HH_bits, file = paste0(savePath, "BITS_HH_1991_", assYear, "_", Sys.Date(),".csv"), row.names = FALSE)
-write.csv(HL_bits, file = paste0(savePath, "BITS_HL_1991_", assYear, "_", Sys.Date(),".csv"), row.names = FALSE)
-write.csv(CA_bits, file = paste0(savePath, "BITS_CA_1991_", assYear, "_", Sys.Date(),".csv"), row.names = FALSE)
+# write.csv(HH_bits, file = paste0(savePath, "BITS_HH_1991_", assYear, "_", Sys.Date(),".csv"), row.names = FALSE)
+# write.csv(HL_bits, file = paste0(savePath, "BITS_HL_1991_", assYear, "_", Sys.Date(),".csv"), row.names = FALSE)
+# write.csv(CA_bits, file = paste0(savePath, "BITS_CA_1991_", assYear, "_", Sys.Date(),".csv"), row.names = FALSE)
+
+write.csv(HH_bits, file = paste0(savePath, "BITS_HH_1991_AssYear_", Sys.Date(),".csv"), row.names = FALSE)
+write.csv(HL_bits, file = paste0(savePath, "BITS_HL_1991_AssYear_", Sys.Date(),".csv"), row.names = FALSE)
+write.csv(CA_bits, file = paste0(savePath, "BITS_CA_1991_AssYear_", Sys.Date(),".csv"), row.names = FALSE)
 
 # ##  Save all as independent csv files - run as local job
 # write.csv(HH_bits, file = "Surveys/exchange/BITS_HH_1991_AssYear.csv", row.names = FALSE)

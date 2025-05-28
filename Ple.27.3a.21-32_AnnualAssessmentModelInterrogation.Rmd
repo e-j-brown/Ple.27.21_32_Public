@@ -86,14 +86,16 @@ apply_rounding <- function(df) {
   # Iterate through each column in the dataframe
   df[] <- lapply(df, function(col) {
     if (is.numeric(col)) {
-      # Apply rounding rules to numeric columns
+      # Apply rounding rules to numeric columns, skipping NAs
       return(sapply(col, function(x) {
-        if (x < 0.2) {
-          round(x, 3)
+        if (is.na(x)) {
+          return(NA)
+        } else if (x < 0.2) {
+          return(round(x, 3))
         } else if (x >= 0.2 && x < 1) {
-          round(x, 2)
+          return(round(x, 2))
         } else {
-          round(x, 0)
+          return(round(x, 0))
         }
       }))
     } else {
@@ -103,6 +105,7 @@ apply_rounding <- function(df) {
   })
   return(df)
 }
+
 ```
 
 We also need to set a few variables manually.  
@@ -546,6 +549,7 @@ Here we create a table that can be copied into the ices SAG system to generate s
 #===
 # table of Recruitment, SSB, TSB and F
 #====
+## Create table from component parts
 tsb<-tsbtable(fit_CURRENT)
 colnames(tsb)<-c("TSB","Low", "High")
 tabsum <- as.data.frame(cbind(summary(fit_CURRENT), tsb))
@@ -555,10 +559,12 @@ rownames(tabsum) <- NULL
 colnames(tabsum) <- c("R_age1", "RLow", "RHigh", "SSB", "SSBLow", "SSBHigh", "Fbar", "FLow", "FHigh", "TSB", "TSBLow", "TSBHigh", "Year")
 tabsum <- tabsum[, c("Year", "RLow", "R_age1", "RHigh", "TSBLow", "TSB", "TSBHigh",  "SSBLow", "SSB","SSBHigh", "FLow", "Fbar", "FHigh")]
 
+## Format data appropriately
+tabsum[tabsum$Year == (DataYear+1), c("Fbar", "FLow", "FHigh")] <- NA
 tabsum <- apply_rounding(tabsum)
 
 kable(tabsum,
-      caption = paste0("Estimated recruitment, spawning stock biomass (SSB), total stock biomass (TSB) and fishing mortality for ages 3-5 of ple.27.21-23.")) 
+      caption = paste0("Estimated recruitment, spawning stock biomass (SSB), total stock biomass (TSB) and fishing mortality for ages 3-6 of ple.27.21-23.")) 
 ```
 
 
@@ -886,8 +892,10 @@ fit_summary <- catchtable(fit_CURRENT)
 dlCatchEst <- rowSums(dtcaton_CURRENT)
 ## Total DEAD & SURVIVING catch mass, all ages summed, from calcs using discards and landings independently
 sdlCatchEst <- rowSums(caton_CURRENT)
+## Surviving catch mass all ages summed from calcs using discards and landings independently
+sCatchEst <- sdlCatchEst - dlCatchEst
 
-## Total catch mass, all ages summed, from cayTable*cw
+## Total dead catch mass, all ages summed, from cayTable*cw
 CatchEst <- rowSums(dcn_CURRENT*fit_CURRENT$data$catchMeanWeight[, , "Residual catch"])
 
 
@@ -922,6 +930,7 @@ asum_Survivors$CatchObsSurv <- rowSums(CatchData_NoSurvivals)
 
 ```
 
+## Catch plot with added survivors
 ```{r fig.cap= "Annual catch estimates (lines), 95% confidence intervals (ribbon) and point annual observations (points) for ple.27.21-32.  Green is the outcome of the current stock annex procedure with the latest data, orange are the observations the model is fit to (both without surviving discards), and blue are the values with suriving discards added back to the estimates."}
 pcat <- ggplot() +
   geom_line(data = asum_Survivors,
@@ -961,6 +970,27 @@ pcat <- ggplot() +
 ggplotly(pcat, tooltip = c("series", "x", "y"))
 ```
 
+## Summary of the assessment table
+
+```{r assessmentSummarySurvivors}
+## Assemble component parts
+sumassess <- asum_CURRENT[, !grepl("Catch", colnames(asum_CURRENT))]
+sumassess[sumassess$Year == (DataYear+1), grepl("F", colnames(sumassess))] <- NA
+
+sumassess$Landings <- c(rowSums(lcaton_CURRENT), "2025" = NA)
+sumassess$DiscardsDead <- c(rowSums(ddcaton_CURRENT), "2025" = NA)
+sumassess$DiscardsSurviving <- c(sCatchEst, NA)
+
+## Format table appropriately
+colnames(sumassess) <- c("Year", "R_age1", "RLow", "RHigh", "SSB", "SSBLow", "SSBHigh", "Fbar", "FLow", "FHigh", "Landings", "Discards_Dead", "Discards_Survived")
+sumassess <- sumassess[, c("Year", "RLow", "R_age1", "RHigh", "SSBLow", "SSB","SSBHigh", "Landings", "Discards_Dead", "Discards_Survived", "FLow", "Fbar", "FHigh")]
+
+sumassess <- apply_rounding(sumassess)
+
+kable(sumassess,
+      caption = paste0("Estimated recruitment, spawning stock biomass (SSB), Landings, Discards and fishing mortality for ages 3-6 of ple.27.21-23.")) 
+
+```
 
 
 
