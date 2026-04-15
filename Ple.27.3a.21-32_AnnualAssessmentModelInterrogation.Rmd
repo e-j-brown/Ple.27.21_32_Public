@@ -118,10 +118,10 @@ We also utilise some reference points to contextualise the output estimates of t
 Finally, we set a few paths to be able to find and save stuff.
 
 ```{r prepFixedVariables}
-DataYear <- 2024
-LastIcesAdvice <- 25365 # Advised catch for areas 21-32 (from stock splitting table in advice)
-# isFinal <- FALSE
-isFinal <- TRUE
+DataYear <- 2025
+LastIcesAdvice <- 16533 # Advised catch for areas 21-32 (from stock splitting table in advice)
+isFinal <- FALSE
+# isFinal <- TRUE
 
 ## Reference points
 MSYBtrigger <- 13460
@@ -144,11 +144,35 @@ figPath <- paste0("Figures/")
 
 # Baseline
 
-The baseline model we're using to comare this year's model against, is the final model from last year's Benchmark workshop, using catch data up until 2023 and survey data up to Q1 2025. This baseline model is called [ple.27.21-32_WKBPLAICE_2024_nmG5Fb_mo1_dsmed6]https://stockassessment.org/setStock.php?stock=ple.27.21-32_WKBPLAICE_2024_nmG5Fb_mo1_dsmed6) and can be found on [stockassessment.org](https://stockassessment.org).
+The baseline model we're using to comare this year's model against, is the final model from last year's Benchmark workshop, using catch data up until 2023 and survey data up to Q1 2025. This baseline model is called [ple.27.21-32_WGBFAS_2025_SA]https://stockassessment.org/setStock.php?stock=ple.27.21-32_WGBFAS_2025_SA) and can be found on [stockassessment.org](https://stockassessment.org).
 
 ```{r BASEFitFromWeb}
 set.seed(12345)
-fit_BASE <- fitfromweb("ple.27.21-32_WKBPLAICE_2024_nmG5Fb_mo1_dsmed6")
+
+## Primary attempt at getting latest fit from web
+# fit_BASE <- fitfromweb("ple.27.21-32_WGBFAS_2025_SA")
+
+## Back-up attempt if server unavailbe, use offline copy of model.Rdata
+fit_BASE <- NULL
+if (file.exists("PrefitModels/BaseFit.RData")) {
+
+  load("PrefitModels/BaseFit.RData")
+  fit_BASE <- fit
+
+} else if (file.exists("PrefitModels/CurrentFit.RData")) {
+
+  load("PrefitModels/CurrentFit.RData")
+  fit_BASE <- fit
+
+} else {
+
+  message(
+    "No model objects available. Please download model.RData objects from ",
+    "stockassessment.org, rename as BaseFit.RData and CurrentFit.RData, ",
+    "respectively, in the directory PrefitModels"
+  )
+}
+rm(fit)
 ```
 
 ```{r dataframeSummary_BASE, results='hide', fig.show='hide'}
@@ -160,7 +184,7 @@ asum_BASE$Year <- as.integer(row.names(summary(fit_BASE)))
 ct_BASE <- as.data.frame(catchtable(fit_BASE, obs.show = TRUE))
 ct_BASE$Year <- as.integer(rownames(ct_BASE))
 rownames(ct_BASE) <- NULL
-ct_BASE <- rbind(ct_BASE, data.frame(Estimate = NA, Low=NA, High=NA, sop.catch=NA, Year=as.integer(2024)))
+ct_BASE <- rbind(ct_BASE, data.frame(Estimate = NA, Low=NA, High=NA, sop.catch=NA, Year=as.integer(DataYear)))
 asum_BASE <- merge(x = asum_BASE, y = ct_BASE, by = "Year")
 colnames(asum_BASE) <- c("Year", "R_age1", "Rlow", "Rhigh", "SSB", "SSBlow", "SSBhigh", "Fbar", "Flow", "Fhigh", "CatchEst", "Catchlow", "Catchhigh", "CatchObs")
 #=====
@@ -170,11 +194,29 @@ colnames(asum_BASE) <- c("Year", "R_age1", "Rlow", "Rhigh", "SSB", "SSBlow", "SS
 
 ## Fit Model
 
-This year's assessment model is based on the new Stock Annex procedure from the 2024 Benchmark workshop. This model is also available from [stockassessment.org](https://stockassessment.org), and is called [ple.27.21.32_WGBFAS_CURRENT](https://stockassessment.org/setStock.php?stock=ple.27.21.32_WGBFAS_CURRENT).
+This year's assessment model is based on the new Stock Annex procedure from the 2024 Benchmark workshop. This model is also available from [stockassessment.org](https://stockassessment.org), and is called [ple.27.21.32_WGBFAS_2026_SA](https://stockassessment.org/setStock.php?stock=ple.27.21.32_WGBFAS_2026_SA).
 
 ```{r 2025_SAFitFromWeb}
 set.seed(12345)
-fit_CURRENT <- fitfromweb("ple.27.21.32_WGBFAS_2025_SA")
+
+# ## Primary attempt to download latest fit from stockassessment.org
+# fit_CURRENT <- fitfromweb("ple.27.21.32_WGBFAS_2026_SA")
+
+## Back-up attempt if server unavailbe, use offline copy of model.Rdata
+fit_CURRENT <- NULL
+if (file.exists("PrefitModels/CurrentFit.RData")) {
+
+  load("PrefitModels/CurrentFit.RData")
+  fit_CURRENT <- fit
+
+} else {
+
+  message(
+    "No model object available. Please download model.RData objects from ",
+    "stockassessment.org, rename as CurrentFit.RData, in the directory PrefitModels"
+  )
+}
+rm(fit)
 ```
 
 ```{r dataframeSummary_CURRENT, results='hide', fig.show='hide'}
@@ -343,7 +385,7 @@ if(!all(fit_CURRENT$conf$obsCorStruct=="ID")){
 
 ```
 
-```{r fig.cap="One observation ahead residuals for the three fleets (red/pink = observation higher than model estimate, blue = observation lower than model estimate, size = magnitude of residual).", fig.height=8}
+```{r fig.cap="One observation ahead residuals for the three fleets (red/pink = observation lower than model estimate, blue = observation lower than model estimate, size = magnitude of residual).", fig.height=8}
 ggplotly(ggplot(resid_CURRENT_df) +
            geom_point(mapping = aes(x = year,
                                     y = age,
@@ -829,7 +871,7 @@ The assessment model is then run with only landings and "dead discards", contrib
 survfrac <- read.ices("Assessment Input/StockAnnex/df_frac.dat")
 
 # Cutdown ages of input data to 7+ group ----
-catch.no<-read.ices("Assessment Input/StockAnnex/cn_mid.dat")/1000
+catch.no<-read.ices("Assessment Input/StockAnnex/cn.dat")/1000
 cutage<-7
 low<-1
 GE<-which(as.numeric(colnames(catch.no))>=cutage)
@@ -915,8 +957,8 @@ asum_Survivors <- asum_CURRENT[asum_CURRENT$Year != (DataYear+1), ]
 asum_Survivors$CatchSurv <- unname(sdlCatchEst)
 
 ## Pull in and clean full catch data
-catch.no<-read.ices('Assessment Input/AlternateModel_NoDiscardSurvival/cn.dat')/1000
-catch.mean.weight<-read.ices('Assessment Input/AlternateModel_NoDiscardSurvival/cw.dat')
+catch.no<-read.ices('Assessment Input/StockAnnex/cn.dat')/1000
+catch.mean.weight<-read.ices('Assessment Input/StockAnnex/cw.dat')
 
 catch.no[,E]<-rowSums(catch.no[,GE])
 catch.no<-catch.no[,low:E]

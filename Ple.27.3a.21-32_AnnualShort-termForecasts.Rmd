@@ -110,10 +110,10 @@ We also utilise some reference points to contextualise the output estimates of t
 Finally, we set a few paths to be able to find and save stuff.
 
 ```{r prepFixedVariables}
-DataYear <- 2024
-LastIcesAdvice <- 25365 # Advised catch for areas 21-32 (from stock splitting table in advice)
-isFinal <- FALSE
-# isFinal <- TRUE
+DataYear <- 2025
+LastIcesAdvice <- 16533 # Advised catch for areas 21-32 (from stock splitting table in advice)
+# isFinal <- FALSE
+isFinal <- TRUE
 
 ## Reference points
 MSYBtrigger <- 13460
@@ -135,11 +135,28 @@ figPath <- paste0("Figures/")
 ```
 
 # Selected Assessment Model
-The model selected for creating forecasts and advice, this year, is called [ple.27.21.32_WGBFAS_2025_SA](https://stockassessment.org/setStock.php?stock=ple.27.21.32_WGBFAS_2025_SA) and is available from [stockassessment.org](https://stockassessment.org).
+The model selected for creating forecasts and advice, this year, is called [ple.27.21.32_WGBFAS_2026_SA](https://stockassessment.org/setStock.php?stock=ple.27.21.32_WGBFAS_2026_SA) and is available from [stockassessment.org](https://stockassessment.org).
 
 ```{r 2025_SAFitFromWeb}
 set.seed(12345)
-fit_CURRENT <- fitfromweb("ple.27.21.32_WGBFAS_2025_SA")
+# ## Primary attempt to download latest fit from stockassessment.org
+# fit_CURRENT <- fitfromweb("ple.27.21.32_WGBFAS_2026_SA")
+
+## Back-up attempt if server unavailbe, use offline copy of model.Rdata
+fit_CURRENT <- NULL
+if (file.exists("PrefitModels/CurrentFit.RData")) {
+
+  load("PrefitModels/CurrentFit.RData")
+  fit_CURRENT <- fit
+
+} else {
+
+  message(
+    "No model object available. Please download model.RData objects from ",
+    "stockassessment.org, rename as CurrentFit.RData, in the directory PrefitModels"
+  )
+}
+rm(fit)
 ```
 
 ```{r dataframeSummary_CURRENT, results='hide', fig.show='hide'}
@@ -163,7 +180,7 @@ colnames(asum_CURRENT) <- c("Year", "R_age1", "Rlow", "Rhigh", "SSB", "SSBlow", 
 survfrac <- read.ices("Assessment Input/StockAnnex/df_frac.dat")
 survfracTotal <- survfrac
 ## Cutdown ages of input data to 7+ group
-catch.no <- read.ices("Assessment Input/StockAnnex/cn_mid.dat")/1000
+catch.no <- read.ices("Assessment Input/StockAnnex/cn.dat")/1000
 cutage <- 7
 low <- 1
 GE <- which(as.numeric(colnames(catch.no)) >= cutage)
@@ -190,10 +207,10 @@ deadCatchNo<-read.ices("Assessment Input/StockAnnex/cn_mid.dat")/1000
 deadcatchMeanWeight<-read.ices('Assessment Input/StockAnnex/cw_mid.dat')
 deadDisMeanWeight<-read.ices('Assessment Input/StockAnnex/dw_mid.dat')
 deaddf<- 1-read.ices('Assessment Input/StockAnnex/lf_mid_frac.dat')
-totCatchNo <- read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/cn.dat")/1000
-totcatchMeanWeight <- read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/cw.dat")
-totdisMeanWeight <- read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/dw.dat")
-totdf <- 1-read.ices("Assessment Input/AlternateModel_NoDiscardSurvival/lf_frac.dat")
+totCatchNo <- read.ices("Assessment Input/StockAnnex/cn.dat")/1000
+totcatchMeanWeight <- read.ices("Assessment Input/StockAnnex/cw.dat")
+totdisMeanWeight <- read.ices("Assessment Input/StockAnnex/dw.dat")
+totdf <- 1-read.ices("Assessment Input/StockAnnex/lf_frac.dat")
 
 ## Mass of catch components
 deadCatchMass <- deadCatchNo*deadcatchMeanWeight
@@ -491,8 +508,8 @@ asum_Survivors$CatchSurvHigh <- asum_Survivors$Catchhigh+(asum_Survivors$CatchSu
 asum_Survivors$CatchSurvLow <- asum_Survivors$Catchlow+(asum_Survivors$CatchSurv - asum_Survivors$CatchEst)
 
 ## Re-extract Full Catch Observations
-catch.no<-read.ices('Assessment Input/AlternateModel_NoDiscardSurvival/cn.dat')/1000
-catch.mean.weight<-read.ices('Assessment Input/AlternateModel_NoDiscardSurvival/cw.dat')
+catch.no<-read.ices('Assessment Input/StockAnnex/cn.dat')/1000
+catch.mean.weight<-read.ices('Assessment Input/StockAnnex/cw.dat')
 
 catch.no[,E]<-rowSums(catch.no[,GE])
 catch.no<-catch.no[,low:E]
@@ -796,7 +813,7 @@ cotable[,5] <- icesRound(cotable[,5]*100, percent = TRUE, sign = FALSE)
 cotable[,6] <- icesRound(cotable[,6]*100, percent = TRUE, sign = FALSE)
 
 kable(cotable,
-      caption = "Catch Options Table; based on old ple.21-23 stock, formatted for advice sheet (ICES rounding rules applied)",
+      caption = "DEAD Catch Options Table; Format based on old ple.21-23 stock,formatted for advice sheet (ICES rounding rules applied), without having surviving discard fraction of the catch added back.",
       col.names = gsub(x = colnames(cotable), pattern = "_", replacement = " "))
 
 # write.csv(cotable, file = paste0("Tables/Ple.27.21-23_CatchOptionsTable_", DataYear+1, ".csv"))

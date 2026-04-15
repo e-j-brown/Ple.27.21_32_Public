@@ -55,6 +55,7 @@ DataProcessed/**
 Figures/**
 Tables/**
 Assessment\ Input/**
+PrefitModels/**
 
 # Do not ignore directory structure
 !DataIn/
@@ -67,6 +68,7 @@ Assessment\ Input/**
 !Tables/**/
 !Assessment\ Input/
 !Assessment\ Input/**/
+!PrefitModels/
 
 # html files generated from .rmds
 *.html
