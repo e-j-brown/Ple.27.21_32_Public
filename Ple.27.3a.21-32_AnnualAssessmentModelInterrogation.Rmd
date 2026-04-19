@@ -244,6 +244,52 @@ When the model is run we can easily see from warnings/errors if there is a conve
 
 Furthermore, SAM does not utilise "bounds" when fitting the model, and therefore, as standard check of whether model parameters are approaching their bounds is irrelevant.
 
+First we can look at how the model fits to observations.  We can do that with two methods, one is looking at the difference in the log observations and estimate on the log scale, the second is looking at the standardised residuals.
+- logObs − logPred tells you how much larger or smaller, multiplicatively
+- residuals(fit) tells you how surprising that deviation is, given the assumed error model
+
+The table below describes the different interpretations of these.
+
+```{r tab_compare_fitmetrics}
+# Create the comparison table
+comparison_table <- data.frame(
+  Aspect = c(
+    "Scale",
+    "Meaning",
+    "Accounts for observation variance (σ)",
+    "Comparable across ages / fleets",
+    "Used directly in likelihood estimation",
+    "Best suited for"
+  ),
+  `logObs - logPred` = c(
+    "Log scale",
+    "Log ratio of observation to prediction",
+    "No",
+    "No",
+    "No",
+    "Exploratory and visual fit diagnostics"
+  ),
+  `residuals(fit)` = c(
+    "Standardized (dimensionless)",
+    "Likelihood-based residual",
+    "Yes",
+    "Yes",
+    "Yes",
+    "Model checking and statistical inference"
+  ),
+  check.names = FALSE
+)
+
+# Render as an HTML table
+kable(
+  comparison_table,
+  format = "html",
+  caption = "Conceptual comparison of log-scale deviations and model residuals"
+)
+
+```
+
+
 ```{r fig.cap="This year's, stock annex based assessment model's fit to catch data by age (values on the model link function scale).", fig.height=8}
 ## Extract data from model object
 logObs_CURRENT <- split(fit_CURRENT$data$logobs, ceiling(seq_along(fit_CURRENT$data$logobs)/fit_CURRENT$data$maxAgePerFleet[1]))
@@ -385,7 +431,7 @@ if(!all(fit_CURRENT$conf$obsCorStruct=="ID")){
 
 ```
 
-```{r fig.cap="One observation ahead residuals for the three fleets (red/pink = observation lower than model estimate, blue = observation lower than model estimate, size = magnitude of residual).", fig.height=8}
+```{r fig.cap="One observation ahead residuals for the three fleets (red/pink = observation lower than model estimate, blue = observation greater than or equal to model estimate, size = magnitude of residual).", fig.height=8}
 ggplotly(ggplot(resid_CURRENT_df) +
            geom_point(mapping = aes(x = year,
                                     y = age,
