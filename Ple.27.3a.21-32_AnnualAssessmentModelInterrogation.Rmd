@@ -69,6 +69,7 @@ require(icesAdvice)
 require("stockassessment") # available from https://github.com/fishfollower/SAM
 require(parallel)
 require(sf)
+require(ggforce)
 
 myprop <- function(df, nomo = "nomo", NoAtLngt = "CANoAtLngt"){
   t <- sum(df$nomo)/sum(df$CANoAtLngt)
@@ -104,6 +105,52 @@ apply_rounding <- function(df) {
     }
   })
   return(df)
+}
+
+make_plus_group <- function(N, M, cutage) {
+  ## N : matrix of numbers-at-age (rows = years, cols = ages)
+  ## M : matrix of mean-at-age (same dimensions as N)
+  ## cutage : numeric age at which plus group starts
+  
+  ## --- basic checks ---
+  if (!is.matrix(N) || !is.matrix(M))
+    stop("N and M must both be matrices")
+
+  if (!all(dim(N) == dim(M)))
+    stop("N and M must have identical dimensions")
+
+  ages <- as.numeric(colnames(N))
+  if (any(is.na(ages)))
+    stop("Column names of N must be numeric ages")
+
+  if (!cutage %in% ages)
+    stop("cutage not found in column names")
+
+  ## --- index sets ---
+  GE <- which(ages >= cutage)   # ages in plus group
+  E  <- which(ages == cutage)   # plus-group column
+  low <- which(ages < cutage)   # ages kept as-is
+
+  ## --- construct plus group numbers (additive) ---
+  N_plus <- rowSums(N[, GE, drop = FALSE])
+
+  ## --- weights for means (numbers-weighted) ---
+  w <- N[, GE, drop = FALSE] / rowSums(N[, GE, drop = FALSE])
+
+  ## --- construct plus group mean ---
+  M_plus <- rowSums(M[, GE, drop = FALSE] * w)
+
+  ## --- build reduced matrices ---
+  N_out <- N[, c(low, E), drop = FALSE]
+  M_out <- M[, c(low, E), drop = FALSE]
+
+  N_out[, E] <- N_plus
+  M_out[, E] <- M_plus
+
+  return(list(
+    N = N_out,
+    M = M_out
+  ))
 }
 
 ```
@@ -654,7 +701,235 @@ tabsum <- apply_rounding(tabsum)
 kable(tabsum,
       caption = paste0("Estimated recruitment, spawning stock biomass (SSB), total stock biomass (TSB) and fishing mortality for ages 3-6 of ple.27.21-23.")) 
 ```
+## Fishing Pressure at Age
+```{r fig.cap="Partial F at age; base model"}
+### Data Prep
+F <- as.data.frame(faytable(fit_CURRENT))
+F$Year <- rownames(F)
+rownames(F) <- NULL
+FLng <- melt(data = F, id.vars = "Year", variable.name = "Age", value.name = "F_atAge")
+FLng$Year <- as.numeric(as.character(FLng$Year))
 
+### Plot
+ggplotly(ggplot() + geom_line(data = FLng, mapping = aes(x = Year, y = F_atAge, colour = Age)) +
+    scale_color_manual(values = ebpal, ) + scale_x_continuous(breaks = unique(FLng$Year)) +
+    theme_few() + theme(axis.text.x = element_text(angle = 45)))
+```
+
+
+## Stock-Recruitment Plots
+In ~2020, this stock experienced an inflection in stock size development, from a steady recovery to a population explosion. In the period prior to 2020 the stock recruitment relationship appeared random, therefore, geometric means of recruitment over the whole time series were used for interim year estimates in short-term forecasts. Since 2020, the rapid development of the stock and subsequent development of the recruitment have provided data in the data space that may indicate a more typical stock-recruitment relationship. 
+
+Below we visualise this relationship with the latest data.  The datapoint for `r DataYear` is shaded a different colour, as the recruitment estimate is based on only a single datapoint (single observation of Age1 fish in the Q1 surveys), compared to `r DataYear-1` which has three in-year datapoints (Q1 & Q3/4 surveys, and catches) as well as data from the assessment year (Age2 fish from`r DataYear` Q1 surveys). Going back in time, the datapoints all get one extra datapoint contributing to the recruitment estimate (as the model fit is influenced by all data).
+
+```{r StockRecruitDataPrep eval="FALSE"}
+### Data Prep
+#### Create new Dataframe with radial fades
+# number of concentric ellipses per point
+K <- 50
+
+# precompute ellipse radii
+a <- (asum_CURRENT$SSBhigh - asum_CURRENT$SSBlow) / 2
+b <- (asum_CURRENT$Rhigh - asum_CURRENT$Rlow) / 2
+
+# repeat rows K times
+df_cloud <- asum_CURRENT[rep(seq_len(nrow(asum_CURRENT)), each = K), ]
+
+# scaling factor for each ellipse
+scale <- rep(seq_len(K) / K, times = nrow(asum_CURRENT))
+
+# assign scaled ellipse parameters
+df_cloud$a <- rep(a, each = K) * scale
+df_cloud$b <- rep(b, each = K) * scale
+
+# transparency (strongest at centre)
+alpha_max <- 0.05
+df_cloud$alpha <- alpha_max * ((1 - scale)^2)
+
+#### add exception for datayear
+df_cloud$use <- ifelse(df_cloud$Year == (DataYear+1), "FALSE", "TRUE")
+tdf <- df_cloud[!duplicated(df_cloud$Year), ]
+
+#### Fit Beverton-Holt model to estimated recruitment
+asum_recent <- asum_CURRENT[asum_CURRENT$Year >= (DataYear-5) & asum_CURRENT$Year != (DataYear+1), ]
+
+# Whole time series
+bh_fit <- nls(
+  log(R_age1) ~ log((alpha * SSB) / (1 + beta * SSB)),
+  data = asum_CURRENT,
+  start = list(alpha = 1, beta = 1e-4),
+  algorithm = "port",
+  lower = c(alpha = 0, beta = 0)
+)
+
+# Recent (more productive) period, without latest highly uncertain recruitment year
+bh_fit_rec <- nls(
+  log(R_age1) ~ log((alpha * SSB) / (1 + beta * SSB)),
+  data = asum_recent,
+  start = list(alpha = 1, beta = 1e-4),
+  algorithm = "port",
+  lower = c(alpha = 0, beta = 0)
+)
+
+#### Create "smooth" curve for ggplot
+# Whole time series
+bh_curve <- data.frame(
+  SSB = seq(min(asum_CURRENT$SSB),
+            max(asum_CURRENT$SSB),
+            length.out = (nrow(asum_CURRENT)*10))
+)
+bh_curve$R_age1 <- (unname(coef(bh_fit)["alpha"])*bh_curve$SSB)/(1+unname(coef(bh_fit)["beta"])*bh_curve$SSB)
+
+# Recent (more productive) period, excluding highly variable last year
+bh_curve_rec <- data.frame(
+  SSB = seq(min(asum_recent$SSB),
+            max(asum_recent$SSB),
+            length.out = (nrow(asum_recent)*10))
+)
+bh_curve_rec$R_age1 <- (unname(coef(bh_fit_rec)["alpha"])*bh_curve_rec$SSB)/(1+unname(coef(bh_fit_rec)["beta"])*bh_curve_rec$SSB)
+
+```
+
+```{r StockRecruitDataPrepSSBLag}
+### Data Prep
+#### Create new dataframe with one year advanced recruitments
+asum_adv <- asum_CURRENT
+asum_adv$SSB <- c(NA, asum_CURRENT$SSB[-nrow(asum_CURRENT)])
+asum_adv$SSBlow <- c(NA, asum_CURRENT$SSBlow[-nrow(asum_CURRENT)])
+asum_adv$SSBhigh <- c(NA, asum_CURRENT$SSBhigh[-nrow(asum_CURRENT)])
+
+#### Create new Dataframe with radial fades
+# number of concentric ellipses per point
+K <- 50
+
+# precompute ellipse radii
+a <- (asum_adv$SSBhigh - asum_adv$SSBlow) / 2
+b <- (asum_adv$Rhigh - asum_adv$Rlow) / 2
+
+# repeat rows K times
+df_cloud <- asum_adv[rep(seq_len(nrow(asum_adv)), each = K), ]
+
+# scaling factor for each ellipse
+scale <- rep(seq_len(K) / K, times = nrow(asum_adv))
+
+# assign scaled ellipse parameters
+df_cloud$a <- rep(a, each = K) * scale
+df_cloud$b <- rep(b, each = K) * scale
+
+# transparency (strongest at centre)
+alpha_max <- 0.05
+df_cloud$alpha <- alpha_max * ((1 - scale)^2)
+
+#### add exception for datayear
+df_cloud$use <- ifelse(df_cloud$Year == (DataYear+1), "FALSE", "TRUE")
+tdf <- df_cloud[!duplicated(df_cloud$Year), ]
+
+#### Fit Beverton-Holt model to estimated recruitment
+asum_recent <- asum_adv[asum_adv$Year >= (DataYear-5) & asum_adv$Year != (DataYear+1), ]
+
+# Whole time series
+bh_fit <- nls(
+  log(R_age1) ~ log((alpha * SSB) / (1 + beta * SSB)),
+  data = asum_adv,
+  start = list(alpha = 1, beta = 1e-4),
+  algorithm = "port",
+  lower = c(alpha = 0, beta = 0)
+)
+
+# Recent (more productive) period, without latest highly uncertain recruitment year
+bh_fit_rec <- nls(
+  log(R_age1) ~ log((alpha * SSB) / (1 + beta * SSB)),
+  data = asum_recent,
+  start = list(alpha = 1, beta = 1e-4),
+  algorithm = "port",
+  lower = c(alpha = 0, beta = 0)
+)
+
+#### Create "smooth" curve for ggplot
+# Whole time series
+bh_curve <- data.frame(
+  SSB = seq(min(asum_adv$SSB, na.rm = T),
+            max(asum_adv$SSB, na.rm = T),
+            length.out = (nrow(asum_adv)*10))
+)
+bh_curve$R_age1 <- (unname(coef(bh_fit)["alpha"])*bh_curve$SSB)/(1+unname(coef(bh_fit)["beta"])*bh_curve$SSB)
+
+# Recent (more productive) period, excluding highly variable last year
+bh_curve_rec <- data.frame(
+  SSB = seq(min(asum_recent$SSB),
+            max(asum_recent$SSB),
+            length.out = (nrow(asum_recent)*10))
+)
+bh_curve_rec$R_age1 <- (unname(coef(bh_fit_rec)["alpha"])*bh_curve_rec$SSB)/(1+unname(coef(bh_fit_rec)["beta"])*bh_curve_rec$SSB)
+
+#### Save models for later reference in forecasts
+save(bh_fit, file = "DataProcessed/Bev-Holt_fullTimeSeries.Rdata")
+save(bh_fit_rec, file = "DataProcessed/Bev_Holt_truncTimeSeries.Rdata")
+```
+
+```{r fig.cap=paste0("SSB-Recruitment relationship(???).  Year labels represent recruitment year, SSB is lagged by age at recruitment (1). The orange line is the chronological path, the black line is the Beverton-Holt SR model for the whole timeseries, and the blue line is the Beverton-Hold SR model without the latest year (R with large uncertainty, in purple) and only the six years before that (i.e. ", DataYear-5, ":", DataYear, ")."}
+# 
+# ### Plot interactive
+# ggplotly(
+# ggplot() +
+#   geom_rect(data = tdf,
+#             mapping = aes(xmin = SSBlow, xmax = SSBhigh, ymin = Rlow, ymax = Rhigh, fill = use),
+#             alpha = 0.15) +
+#   geom_point(
+#     data = tdf,
+#     aes(x = SSB, y = R_age1, colour = use),
+#     size = 0.75
+#   ) +
+#   geom_path(data = tdf,
+#             mapping = aes(x = SSB, y = R_age1),
+#             colour = ebpal[3]) +
+#   scale_alpha_identity() +
+#   scale_fill_manual(values = ebpal, guide = "none") +
+#   scale_color_manual(values = ebpal, guide = "none") +
+#   theme_few()
+# )
+
+### Plot static but elipses
+ggplot() +
+  geom_ellipse(
+    data = df_cloud,
+    aes(x0 = SSB, y0 = R_age1, a = a, b = b, angle = 0, alpha = alpha, fill = use),
+    colour = NA
+  ) +
+  geom_point(
+    data = tdf,
+    aes(x = SSB, y = R_age1, colour = use),
+    size = 0.75
+  ) +
+  geom_path(data = tdf,
+            mapping = aes(x = SSB, y = R_age1),
+            colour = ebpal[3]) +
+  geom_text(
+    data = tdf,
+    aes(x = SSB, y = R_age1, label = Year),
+    colour = "black",
+    nudge_x = 0.03 * diff(range(tdf$SSB, na.rm = TRUE)),
+    nudge_y = 0.03 * diff(range(tdf$R_age1, na.rm = TRUE)),
+    size = 2.5,
+    show.legend = FALSE
+  ) +
+  geom_line(
+    data = bh_curve,
+    aes(x = SSB, y = R_age1),
+    linewidth = 1.1,
+    colour = "black"
+  ) +
+  geom_line(
+    data = bh_curve_rec,
+    aes(x = SSB, y = R_age1),
+    linewidth = 1.1,
+    colour = ebpal[4]
+  ) +
+  scale_alpha_identity() +
+  scale_fill_manual(values = ebpal, guide = "none") +
+  scale_color_manual(values = ebpal, guide = "none") +
+  theme_few()
+```
 
 # Model Performance and Sensitivities
 Now that we've interrogated the model's fit and interpreted its results, we should also see how dependent these results are on the input data. In the leave-one-out  and the retrospective analyses, we remove different tuning fleets and recent data, to see how robust the model's estimations are to the current context.
@@ -1056,6 +1331,164 @@ pcat <- ggplot() +
   theme_clean()
 
 ggplotly(pcat, tooltip = c("series", "x", "y"))
+```
+
+# SSB broken down by desired and undesired components.
+```{r fig.cap="Proportion of SSB that are above the midpoint between the mean landing weight and the mean discard weight, by age, over time"}
+#===
+# Data wrangling
+#===
+## Create threshold weight by age for each year
+cn <- read.ices("Assessment Input/StockAnnex/cn.dat") # Total catch numbers
+lf <- read.ices("Assessment Input/StockAnnex/lf.dat") # Landings catch numbers
+df <- cn-lf                                           # Discard catch numbers
+lw <- read.ices("Assessment Input/StockAnnex/lw.dat") # Mean individual weight in the landings
+dw <- read.ices("Assessment Input/StockAnnex/dw.dat") # Mean individual weigh in the discards
+
+lw <- make_plus_group(N = lf, M = lw, cutage = 7)
+dw <- make_plus_group(N = df, M = dw, cutage = 7)
+w_thr <- ((ifelse(lw$M-dw$M < 0, 0, lw$M-dw$M))/2)+dw$M  # Midpoint between dw and lw, made up by Elliot.  Could be some other relationship.
+
+## Assume DataYear's preferred weight threshold for assessment year.
+w_thr <- rbind(w_thr, w_thr[nrow(w_thr), , drop = FALSE])
+rownames(w_thr)[nrow(w_thr)] <- as.character(as.integer(rownames(w_thr)[nrow(w_thr)]) + 1)
+
+## Extract other necessary data from model
+N <- t(exp(fit_CURRENT$pl$logN))    # array: age × year
+W <- fit_CURRENT$data$stockMeanWeight  # matrix: age × year
+
+# ## Guestimate CV for weights
+# cv_w <- 0.2
+# sigma <- sqrt(log(1 + cv_w^2))
+
+#===
+# Calculate CV for weights
+#===
+ca_hh_fin_bits_ibts <- readRDS(file = "DataProcessed/Surveys/Ple.27.21-32_ca-hh.RDS")
+ca_q1<-subset(ca_hh_fin_bits_ibts,Quarter==1&Age!=-9&Age!=0&Age<8)
+
+ca_q1$groupID <- interaction(ca_q1$Year,
+                             ca_q1$Age,
+                             drop = TRUE)
+mean_w <- tapply(ca_q1$IndWgt, ca_q1$groupID , mean)
+sd_w   <- tapply(ca_q1$IndWgt, ca_q1$groupID , sd)
+n_w    <- tapply(ca_q1$IndWgt, ca_q1$groupID , length)
+cv_w <- sd_w / mean_w
+
+### set results to dataframe
+cv_w_df <- data.frame(
+  year = as.integer(sub("\\..*$", "", names(mean_w))),
+  age  = as.integer(sub("^.*\\.", "", names(mean_w))),
+  mean_weight = as.numeric(mean_w),
+  sd_weight   = as.numeric(sd_w),
+  cv_w        = as.numeric(cv_w),
+  n           = as.integer(n_w)
+)
+
+## Get unique ages
+ages <- sort(unique(cv_w_df$age))
+
+## Pre-allocate vectors
+cv_w_age <- numeric(length(ages))
+n_total  <- numeric(length(ages))
+
+## Loop over ages
+for (i in seq_along(ages)) {
+
+  a <- ages[i]
+
+  ## Subset rows for this age
+  idx <- cv_w_df$age == a
+
+  cv_vals <- cv_w_df$cv_w[idx]
+  n_vals  <- cv_w_df$n[idx]
+
+  ## Exclude NA CVs (and corresponding n)
+  ok <- !is.na(cv_vals)
+
+  if (any(ok)) {
+    cv_w_age[i] <- sum(n_vals[ok] * cv_vals[ok]) /
+                   sum(n_vals[ok])
+    n_total[i]  <- sum(n_vals[ok])
+  } else {
+    cv_w_age[i] <- NA
+    n_total[i]  <- 0
+  }
+}
+
+## Assemble final data frame
+cv_by_age <- data.frame(
+  age     = ages,
+  cv_w    = cv_w_age,
+  n_total = n_total
+)
+
+sigma <- sqrt(log(1 + cv_by_age$cv_w^2))
+#===
+
+#===
+# Use mean and CV to calculate proportions of biomass
+#===
+## Convert mean to lognormal mu
+mu <- log(W) - 0.5 * sigma^2
+
+## Proportion of biomass above threshold
+P_biom_above <- 1 - pnorm(
+  (log(w_thr) - mu - sigma^2) / sigma  # mu-sigma^2 because estimating for biomass remove sigma if estimating for number????
+)
+
+## Proportion for all ages, weighted by catch numbers at age
+### Match column and row numbers
+rownames(N) <- rownames(P_biom_above)
+colnames(N) <- colnames(P_biom_above)
+TBay <- N*W
+
+### Make overall annual proportion of biomass above threshold
+asum_CURRENT$P_biom_above <- c(unname(make_plus_group(N = TBay, M = P_biom_above, cutage = 1)$M))
+
+## Split SSB by proportions
+asum_CURRENT$Desired_SSB <- asum_CURRENT$SSB*asum_CURRENT$P_biom_above
+asum_CURRENT$Undesired_SSB <- asum_CURRENT$SSB*(1-asum_CURRENT$P_biom_above)
+
+```
+
+## SSB plot split by desired and undesired proportions
+```{r fig.cap= "Estimated spawning stock biomass for ple.27.21-32 and 95% confidence intervals (tonnes). Purple is the baseline model, while green is the outcome of the current stock annex procedure with the latest data. Reference points MSY B-trigger (orange), Bpa (orange, dotted),  and Blim (darker orange) are the horizontal lines."}
+## Data reshape
+ssbd_df <- data.frame(
+  Year  = rep(asum_CURRENT$Year, 2),
+  SSB   = c(asum_CURRENT$Desired_SSB,
+            asum_CURRENT$Undesired_SSB),
+  SSBlow = rep(asum_CURRENT$SSBlow, 2),
+  SSBhigh = rep(asum_CURRENT$SSBhigh, 2),
+  Type  = rep(c("Desired SSB", "Undesired SSB"),
+              each = nrow(asum_CURRENT)),
+  Proportion = c(asum_CURRENT$P_biom_above, (1-asum_CURRENT$P_biom_above))
+)
+
+pssbD <- ggplot() +
+  geom_col(data = ssbd_df,
+            mapping = aes(x=Year,
+                          y=SSB,
+                          series="Current Year SA",
+                          text = round(Proportion, 3),
+                          fill = Type)) +
+  geom_errorbar(data = asum_CURRENT,
+              mapping = aes(x=Year,
+                            ymin=SSBlow,
+                            ymax=SSBhigh),
+              colour = ebpal[3],
+              alpha = 0.5) +
+  geom_hline(yintercept = MSYBtrigger,
+             colour = ebpal[11],
+             mapping = aes(series="MSY B-trigger")) +
+  geom_hline(yintercept = Blim,
+             colour = ebpal[3],
+             mapping = aes(series="Blim")) +
+  scale_fill_manual(values = ebpal, guide = "none") +
+  theme_clean()
+
+ggplotly(pssbD, tooltip = c("series", "x", "y", "fill", "text"))
 ```
 
 ## Summary of the assessment table
