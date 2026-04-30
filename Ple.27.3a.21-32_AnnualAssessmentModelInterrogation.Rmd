@@ -397,7 +397,7 @@ ggplotly(ggplot()+
                      mapping = aes(x = year,
                                    y = logPred,
                                    colour = age)) +
-           facet_wrap(facets = "age") + #, scales = "free_y") +
+           facet_wrap(facets = "age") +
            scale_color_manual(values = ebpal, guide = FALSE) +
            guides(colour=FALSE, shape=FALSE) +
            theme_few())
@@ -417,7 +417,7 @@ ggplotly(ggplot()+
                      mapping = aes(x = year,
                                    y = logPred,
                                    colour = age)) +
-           facet_wrap(facets = "age") + #, scales = "free_y") +
+           facet_wrap(facets = "age") + 
            scale_color_manual(values = ebpal, guide = FALSE) +
            guides(colour=FALSE, shape=FALSE) +
            theme_few())
@@ -435,7 +435,7 @@ ggplotly(ggplot()+
                      mapping = aes(x = year,
                                    y = logPred,
                                    colour = age)) +
-           facet_wrap(facets = "age") + #, scales = "free_y") +
+           facet_wrap(facets = "age") +
            scale_color_manual(values = ebpal, guide = FALSE) +
            guides(colour=FALSE, shape=FALSE) +
            theme_few())
@@ -702,27 +702,59 @@ kable(tabsum,
       caption = paste0("Estimated recruitment, spawning stock biomass (SSB), total stock biomass (TSB) and fishing mortality for ages 3-6 of ple.27.21-23.")) 
 ```
 ## Fishing Pressure at Age
-```{r fig.cap="Partial F at age; base model"}
+```{r FishingPressureAge}
 ### Data Prep
 F <- as.data.frame(faytable(fit_CURRENT))
 F$Year <- rownames(F)
 rownames(F) <- NULL
 FLng <- melt(data = F, id.vars = "Year", variable.name = "Age", value.name = "F_atAge")
 FLng$Year <- as.numeric(as.character(FLng$Year))
+```
 
+```{r fig.cap="Partial F at age"}
 ### Plot
 ggplotly(ggplot() + geom_line(data = FLng, mapping = aes(x = Year, y = F_atAge, colour = Age)) +
     scale_color_manual(values = ebpal, ) + scale_x_continuous(breaks = unique(FLng$Year)) +
     theme_few() + theme(axis.text.x = element_text(angle = 45)))
 ```
 
+```{r tab.cap="Partial F at age"}
+F <- F[, c("Year", "1", "2", "3", "4", "5", "6", "7")]
+kable(F, digits = 3)
+```
+
+## Estimated Numbers at Age
+```{r NoAtAge}
+ntab <- as.data.frame(ntable(fit_CURRENT))
+ntab$Year <- rownames(ntab)
+rownames(ntab) <- NULL
+ntabLng <- melt(data = ntab, id.vars = "Year", variable.name = "Age", value.name = "ntab_atAge")
+ntabLng$Year <- as.numeric(as.character(ntabLng$Year))
+```
+
+```{r fig.cap="Estimated Numbers at Age"}
+### Plot
+ggplotly(ggplot() + 
+           geom_line(data = ntabLng, mapping = aes(x = Year, y = ntab_atAge, colour = Age)) +
+           scale_color_manual(values = ebpal, ) + scale_x_continuous(breaks = unique(ntabLng$Year)) +
+           theme_few() +
+           theme(axis.text.x = element_text(angle = 45)) +
+           ylab("Numbers"))
+```
+
+```{r tab.cap="Estimated Numbers at Age"}
+ntab <- ntab[, c("Year", "1", "2", "3", "4", "5", "6", "7")]
+kable(ntab, digits = 3)
+```
 
 ## Stock-Recruitment Plots
 In ~2020, this stock experienced an inflection in stock size development, from a steady recovery to a population explosion. In the period prior to 2020 the stock recruitment relationship appeared random, therefore, geometric means of recruitment over the whole time series were used for interim year estimates in short-term forecasts. Since 2020, the rapid development of the stock and subsequent development of the recruitment have provided data in the data space that may indicate a more typical stock-recruitment relationship. 
 
-Below we visualise this relationship with the latest data.  The datapoint for `r DataYear` is shaded a different colour, as the recruitment estimate is based on only a single datapoint (single observation of Age1 fish in the Q1 surveys), compared to `r DataYear-1` which has three in-year datapoints (Q1 & Q3/4 surveys, and catches) as well as data from the assessment year (Age2 fish from`r DataYear` Q1 surveys). Going back in time, the datapoints all get one extra datapoint contributing to the recruitment estimate (as the model fit is influenced by all data).
+Below we visualise this relationship with the latest data.  The datapoint for `r DataYear+1` is shaded a different colour, as the recruitment estimate is based on only a single datapoint (single observation of Age1 fish in the Q1 surveys), compared to `r DataYear` which has three in-year datapoints (Q1 & Q3/4 surveys, and catches) as well as data from the assessment year (Age2 fish from`r DataYear+1` Q1 surveys). Going back in time, the datapoints all get one extra datapoint contributing to the recruitment estimate (as the model fit is influenced by all data).
 
-```{r StockRecruitDataPrep eval="FALSE"}
+Based on the fits observed at WGBFAS in 2026, it was decided to change the interim-year assumptions for recruitment from the stock-annex's *geometric median of the entire time series*, to *geometric median of the most recent 5 years, excluding the assessment year*.  This means the interim recruitment will be the median re-sampled from the recruitment values for `r DataYear-4` to `r DataYear`.
+
+```{r StockRecruitDataPrep, eval="FALSE"}
 ### Data Prep
 #### Create new Dataframe with radial fades
 # number of concentric ellipses per point
@@ -867,7 +899,7 @@ save(bh_fit, file = "DataProcessed/Bev-Holt_fullTimeSeries.Rdata")
 save(bh_fit_rec, file = "DataProcessed/Bev_Holt_truncTimeSeries.Rdata")
 ```
 
-```{r fig.cap=paste0("SSB-Recruitment relationship(???).  Year labels represent recruitment year, SSB is lagged by age at recruitment (1). The orange line is the chronological path, the black line is the Beverton-Holt SR model for the whole timeseries, and the blue line is the Beverton-Hold SR model without the latest year (R with large uncertainty, in purple) and only the six years before that (i.e. ", DataYear-5, ":", DataYear, ")."}
+```{r fig.cap=paste0("SSB-Recruitment relationship(???).  Year labels represent recruitment year, SSB is lagged by age at recruitment (1). The orange line is the chronological path, the black line is the Beverton-Holt SR model for the whole timeseries, and the blue line is the Beverton-Hold SR model without the latest year (R with large uncertainty, in purple) and only the six years before that (i.e. ", DataYear-5, ":", DataYear, ").")}
 # 
 # ### Plot interactive
 # ggplotly(
@@ -1333,8 +1365,74 @@ pcat <- ggplot() +
 ggplotly(pcat, tooltip = c("series", "x", "y"))
 ```
 
-# SSB broken down by desired and undesired components.
-```{r fig.cap="Proportion of SSB that are above the midpoint between the mean landing weight and the mean discard weight, by age, over time"}
+## Summary of the assessment table
+```{r assessmentSummarySurvivors}
+## Assemble component parts
+sumassess <- asum_CURRENT[, !grepl("Catch", colnames(asum_CURRENT))]
+sumassess[sumassess$Year == (DataYear+1), grepl("F", colnames(sumassess))] <- NA
+
+v <- setNames(NA_real_, as.character(DataYear + 1))
+sumassess$Landings <- c(rowSums(lcaton_CURRENT), v)
+sumassess$DiscardsDead <- c(rowSums(ddcaton_CURRENT), v)
+sumassess$DiscardsSurviving <- c(sCatchEst, v)
+
+## Format table appropriately
+colnames(sumassess) <- c("Year", "R_age1", "RLow", "RHigh", "SSB", "SSBLow", "SSBHigh", "Fbar", "FLow", "FHigh", "Landings", "Discards_Dead", "Discards_Survived")
+sumassess <- sumassess[, c("Year", "RLow", "R_age1", "RHigh", "SSBLow", "SSB","SSBHigh", "Landings", "Discards_Dead", "Discards_Survived", "FLow", "Fbar", "FHigh")]
+
+sumassess <- apply_rounding(sumassess)
+
+kable(sumassess,
+      caption = paste0("Estimated recruitment, spawning stock biomass (SSB), Landings, Discards and fishing mortality for ages 3-6 of ple.27.21-23.")) 
+
+```
+
+# SSB broken down by retained and unretained components.
+Because the Baltic plaice are starting to grow slower and be of a low condition, a large proportion of the stock are not of interest to fishers.  To try and illustrate this we will try to identify thresholds for *Desired/Fishable* components of the stock.  While conceptually this seems like a simple task of identifying and applying a threshold, the reality is much more complex.  Below is a description of the process and logic, followed by code chunks that executes this logic, and accompanying visualisations. 
+
+## Logic and reasoning behind calculations
+### Establishng thresholds for desired fish
+Because our assessment uses numbers at age and mean weights at age, and not length, we will make our thresholds based on individual weights and stratify these by age and over time, to account for variability in the retainable weight-at-age. 
+
+First we read in some assessment input data, but this is data where the discards are not split by surviving and dead fractions, so it comes from outside the stock assessment model.  We use the numbers landed and discarded to work out weighted means for age specific mean weights for each of the landings and discards, when calculating the plus group (from 10+ to 7+). 
+
+The threshold is then the midpoint between the landings and discard weight, for each age and year.The difference between landings and total catches is used as a proxy for size‑selective retention. Landed fish tend to be larger, discarded fish smaller. These data define an implicit size threshold that varies by age and year.
+
+While this is data-driven, the logic underlying it is a simple assumption which may not be suitable and needs to be discussed and agreed upon by a group of experts. 
+
+As we don't have observations of landings and discards for within the assessment year (`r DataYear+1`), we re-use the thresholds from the immediate preceding year (`r DataYear`).
+
+### Extracting population quantities from the assessment model
+We use *logN* (estimated log numbers at age) to calculate total estimated numbers of individuals at age (*exp(logN)*).
+We take the stock weights directly from the input data component of the model.
+
+We extract these data as they are population‑level quantities, rather than catch dependent.
+All later calculations are applied to the stock, not the catch
+
+### Estimating within age variability in weights
+We use the survey identified individual weights to estimate:
+
+- mean
+- standard deviation
+- coefficient of variation (CV)
+
+The coefficients of variation are:
+
+- estimated by age and year
+- pooled to an age‑specific CV using biomass at age by year weighting
+
+We need this because to estimate biomass of fish above an individual weight threshold, we need a within-age distribution and so we need not just the mean.
+
+### Parameterising the lognormal weight distributions
+We use the mean and CV to calculate $\mu$ and $\sigma$ of the lognormal distribution around each age and year individual weights.
+
+### Calculating proportion of biomass above threshold
+We then establish a biomass-weighted tail probability using the matrix of threshold weights by age and year (where the thresholds are the mid-points between landed and discarded mean weights) and the estimated contributions of individuals to the total biomass of each age*year strata.
+
+### Proportions of biomass of fish of desirable size 
+Finally, we collapse the annually varying age values to overall proportions for each year.  We do this by taking weighted means of the desirable size proportions, weighted by biomass.  These proportions are then applied to the annual SSB estimates from SAM.
+
+```{r DesiredSSB}
 #===
 # Data wrangling
 #===
@@ -1342,11 +1440,14 @@ ggplotly(pcat, tooltip = c("series", "x", "y"))
 cn <- read.ices("Assessment Input/StockAnnex/cn.dat") # Total catch numbers
 lf <- read.ices("Assessment Input/StockAnnex/lf.dat") # Landings catch numbers
 df <- cn-lf                                           # Discard catch numbers
-lw <- read.ices("Assessment Input/StockAnnex/lw.dat") # Mean individual weight in the landings
-dw <- read.ices("Assessment Input/StockAnnex/dw.dat") # Mean individual weigh in the discards
+lwr <- read.ices("Assessment Input/StockAnnex/lw.dat") # Mean individual weight in the landings
+dwr <- read.ices("Assessment Input/StockAnnex/dw.dat") # Mean individual weigh in the discards
+dmr <- df*dwr                                          # Discard biomass
 
-lw <- make_plus_group(N = lf, M = lw, cutage = 7)
-dw <- make_plus_group(N = df, M = dw, cutage = 7)
+lw <- make_plus_group(N = lf, M = lwr, cutage = 7)
+dw <- make_plus_group(N = df, M = dwr, cutage = 7)
+dm <- make_plus_group(N = df, M = dmr, cutage = 7)
+dfp <- cbind(df[, 1:6], "7" = rowSums(df[, 7:10]))
 w_thr <- ((ifelse(lw$M-dw$M < 0, 0, lw$M-dw$M))/2)+dw$M  # Midpoint between dw and lw, made up by Elliot.  Could be some other relationship.
 
 ## Assume DataYear's preferred weight threshold for assessment year.
@@ -1356,6 +1457,7 @@ rownames(w_thr)[nrow(w_thr)] <- as.character(as.integer(rownames(w_thr)[nrow(w_t
 ## Extract other necessary data from model
 N <- t(exp(fit_CURRENT$pl$logN))    # array: age × year
 W <- fit_CURRENT$data$stockMeanWeight  # matrix: age × year
+mo <- fit_CURRENT$data$propMat
 
 # ## Guestimate CV for weights
 # cv_w <- 0.2
@@ -1385,10 +1487,9 @@ cv_w_df <- data.frame(
   n           = as.integer(n_w)
 )
 
-## Get unique ages
+# Not enough samples by age and year, so estimate CV over year, within age.
+## Get unique ages and Pre-allocate vectors
 ages <- sort(unique(cv_w_df$age))
-
-## Pre-allocate vectors
 cv_w_age <- numeric(length(ages))
 n_total  <- numeric(length(ages))
 
@@ -1441,19 +1542,35 @@ P_biom_above <- 1 - pnorm(
 ### Match column and row numbers
 rownames(N) <- rownames(P_biom_above)
 colnames(N) <- colnames(P_biom_above)
+### Total biomass at age
 TBay <- N*W
 
-### Make overall annual proportion of biomass above threshold
-asum_CURRENT$P_biom_above <- c(unname(make_plus_group(N = TBay, M = P_biom_above, cutage = 1)$M))
+### Total Biomass at age above threshold
+TBay_above <- TBay*P_biom_above
+
+### SSB total manual and at age above threshold
+SSBay_above <- TBay_above * mo
+SSBay_total <- TBay * mo
+
+### Internally consistent proportion of SSB above threshold
+asum_CURRENT$SSB_propAbove <- (rowSums(SSBay_above) / rowSums(SSBay_total))
 
 ## Split SSB by proportions
-asum_CURRENT$Desired_SSB <- asum_CURRENT$SSB*asum_CURRENT$P_biom_above
-asum_CURRENT$Undesired_SSB <- asum_CURRENT$SSB*(1-asum_CURRENT$P_biom_above)
+asum_CURRENT$Desired_SSB <- asum_CURRENT$SSB*asum_CURRENT$SSB_propAbove
+asum_CURRENT$Undesired_SSB <- asum_CURRENT$SSB*(1-asum_CURRENT$SSB_propAbove)
 
 ```
 
-## SSB plot split by desired and undesired proportions
-```{r fig.cap= "Estimated spawning stock biomass for ple.27.21-32 and 95% confidence intervals (tonnes). Purple is the baseline model, while green is the outcome of the current stock annex procedure with the latest data. Reference points MSY B-trigger (orange), Bpa (orange, dotted),  and Blim (darker orange) are the horizontal lines."}
+
+```{r tab.cap="Annually varying values of estimated SSB, proportions of stock above desired weight at age, and the fractions of the SSB that are composed of desired and undesired sized fish."}
+ddf <- asum_CURRENT[, c("Year", "SSB_propAbove", "SSB", "Desired_SSB", "Undesired_SSB")]
+colnames(ddf) <- c("Year", "ProportionSSBRetainableSize", "SSB", "SSB_RetainableSize", "SSB_UnretainableSize")
+
+kable(ddf, digits = c(0,2,0,0,0), row.names = FALSE)
+```
+
+## SSB plot split by fractions of fish of desired and undesired weights at age.
+```{r fig.cap= "Estimated spawning stock biomass for ple.27.21-32 and 95% confidence intervals (tonnes). Purple is the component of the SSB comprised of fish considered to be of a retainable condition (weight at age), by fishers. Green is the component of the SSB that is not retainable in the fishery.  Weight thresholds are established by age and by year, then applied annually with a biomass weighted average proportion. Reference points MSY B-trigger (orange), Bpa (orange, dotted),  and Blim (darker orange) are the horizontal lines."}
 ## Data reshape
 ssbd_df <- data.frame(
   Year  = rep(asum_CURRENT$Year, 2),
@@ -1461,10 +1578,12 @@ ssbd_df <- data.frame(
             asum_CURRENT$Undesired_SSB),
   SSBlow = rep(asum_CURRENT$SSBlow, 2),
   SSBhigh = rep(asum_CURRENT$SSBhigh, 2),
-  Type  = rep(c("Desired SSB", "Undesired SSB"),
+  Type  = rep(c("Component above commercially\nretainable weight-at-age", "Component below commercially\nretainable weight-at-age"),
               each = nrow(asum_CURRENT)),
-  Proportion = c(asum_CURRENT$P_biom_above, (1-asum_CURRENT$P_biom_above))
+  Proportion = c(asum_CURRENT$SSB_propAbove, (1-asum_CURRENT$SSB_propAbove))
 )
+
+ICES_cols <- c("#2C7FB8", "#A6CEE3", "#E5F5F9", "#E31A1C", "#1A9641", "#B2DF8A")
 
 pssbD <- ggplot() +
   geom_col(data = ssbd_df,
@@ -1473,45 +1592,29 @@ pssbD <- ggplot() +
                           series="Current Year SA",
                           text = round(Proportion, 3),
                           fill = Type)) +
-  geom_errorbar(data = asum_CURRENT,
-              mapping = aes(x=Year,
-                            ymin=SSBlow,
-                            ymax=SSBhigh),
-              colour = ebpal[3],
-              alpha = 0.5) +
   geom_hline(yintercept = MSYBtrigger,
              colour = ebpal[11],
              mapping = aes(series="MSY B-trigger")) +
   geom_hline(yintercept = Blim,
              colour = ebpal[3],
              mapping = aes(series="Blim")) +
-  scale_fill_manual(values = ebpal, guide = "none") +
-  theme_clean()
+  scale_fill_manual(values = ICES_cols[c(2,1)], guide = "none") +
+  coord_cartesian(expand = FALSE) +
+  theme_clean() +
+  theme(legend.position = "bottom")
 
-ggplotly(pssbD, tooltip = c("series", "x", "y", "fill", "text"))
+layout(ggplotly(pssbD, 
+                tooltip = c("series", "x", "y", "fill", "text")),
+       legend = list(
+         orientation = "h",
+         x = 0.5,
+         xanchor = "center",
+         y = -0.15,
+         yanchor = "top"),
+       margin = list(b = 80)  # prevent clipping
+)
 ```
 
-## Summary of the assessment table
-
-```{r assessmentSummarySurvivors}
-## Assemble component parts
-sumassess <- asum_CURRENT[, !grepl("Catch", colnames(asum_CURRENT))]
-sumassess[sumassess$Year == (DataYear+1), grepl("F", colnames(sumassess))] <- NA
-
-sumassess$Landings <- c(rowSums(lcaton_CURRENT), "2025" = NA)
-sumassess$DiscardsDead <- c(rowSums(ddcaton_CURRENT), "2025" = NA)
-sumassess$DiscardsSurviving <- c(sCatchEst, NA)
-
-## Format table appropriately
-colnames(sumassess) <- c("Year", "R_age1", "RLow", "RHigh", "SSB", "SSBLow", "SSBHigh", "Fbar", "FLow", "FHigh", "Landings", "Discards_Dead", "Discards_Survived")
-sumassess <- sumassess[, c("Year", "RLow", "R_age1", "RHigh", "SSBLow", "SSB","SSBHigh", "Landings", "Discards_Dead", "Discards_Survived", "FLow", "Fbar", "FHigh")]
-
-sumassess <- apply_rounding(sumassess)
-
-kable(sumassess,
-      caption = paste0("Estimated recruitment, spawning stock biomass (SSB), Landings, Discards and fishing mortality for ages 3-6 of ple.27.21-23.")) 
-
-```
 
 
 

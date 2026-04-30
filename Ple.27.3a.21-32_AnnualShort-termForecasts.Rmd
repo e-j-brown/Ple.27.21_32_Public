@@ -253,7 +253,8 @@ _Note_: We don't use the within assessment year (`r DataYear+1`) estimation of r
 nruns <- ifelse(isFinal, 50000, 5000)
 bioAveYears <- 3
 bay <- bioAveYears-2
-recyears <- 2002:DataYear
+# recyears <- 2002:DataYear
+recyears <- (DataYear-4):DataYear
 catSurvFracAve <- mean(catFracTot[(length(catFracTot)-(bioAveYears-1)):length(catFracTot)])
 
 FC <- list()
@@ -555,7 +556,7 @@ intyear <- data.frame(Variable = c("F~ages 3-6~",
                                 ForcTable[ForcTable$Year == (DataYear+1) & ForcTable$scenario == "Fmsy", "Discard:median"]),
                       Notes = c(paste0("F~ages 3-6~ in ", DataYear, "."),
                                 "Short-term forecast; tonnes.",
-                                paste0("Median resampled from the entire time series of recruitment (excluding latest year with only Q1 data ", (DataYear+1), "); thousands."),
+                                paste0("Median resampled from the previous five years of estimated recruitment (excluding latest year with only Q1 data ", (DataYear+1), "); thousands."),
                                 paste0("Short-term forecast using F(", (DataYear+1), "), plus surviving discards; tonnes."),
                                 paste0("Short-term forecast; assuming average landings pattern by age in ", (DataYear-(bioAveYears-1)), "-", DataYear, "; tonnes."),
                                 paste0("Short-term forecast; assuming average discard pattern and survival, by age, in ", (DataYear-(bioAveYears-1)), "-", DataYear, ", plus surviving discards; tonnes."),
@@ -570,7 +571,7 @@ kable(intyear,
       caption = "Assumptions made for the interim year and in the forecast",
       digits = 3)
 
-# write.csv(intyear, file = paste0("Tables/Ple.27.21-23_ForecastAssumptions_", DataYear+1, ".csv"))
+write.csv(intyear, file = paste0("Tables/Ple.27.21-23_ForecastAssumptions_", DataYear+1, ".csv"))
 
 ```
 # Short Term Forecast Results
@@ -584,7 +585,7 @@ The full results are too large to present here, but can be generated as a .csv, 
 #       caption = "Forecast table for various combined scenarios",
 #       digits = 2)
 
-# write.csv(ForcTable, file = paste0("Tables/Ple.27.21-23_ForecastResults_", DataYear, "-", DataYear+3, "_Assessment", DataYear+1, ".csv"))
+write.csv(ForcTable, file = paste0("Tables/Ple.27.21-23_ForecastResults_", DataYear, "-", DataYear+3, "_Assessment", DataYear+1, ".csv"))
 
 ss <- "Fmsy"
 ForcTable$Year <- as.numeric(ForcTable$Year)
@@ -869,6 +870,6 @@ kable(cotable,
       caption = "Catch Options Table (with Surviving Discards) formatted for advice sheet (ICES rounding rules applied)",
       col.names = gsub(x = colnames(cotable), pattern = "_", replacement = " "))
 
-# write.csv(cotable, file = paste0("Tables/Ple.27.21-23_CatchOptionsTable_", DataYear+1, ".csv"))
+write.csv(cotable, file = paste0("Tables/Ple.27.21-23_CatchOptionsTable_", DataYear+1, ".csv"))
 
 ```

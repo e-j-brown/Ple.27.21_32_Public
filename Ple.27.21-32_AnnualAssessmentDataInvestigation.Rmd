@@ -166,6 +166,51 @@ read.ices <- function(file) {
   return(mat)
 }
 
+make_plus_group <- function(N, M, cutage) {
+  ## N : matrix of numbers-at-age (rows = years, cols = ages)
+  ## M : matrix of mean-at-age (same dimensions as N)
+  ## cutage : numeric age at which plus group starts
+  
+  ## --- basic checks ---
+  if (!is.matrix(N) || !is.matrix(M))
+    stop("N and M must both be matrices")
+
+  if (!all(dim(N) == dim(M)))
+    stop("N and M must have identical dimensions")
+
+  ages <- as.numeric(colnames(N))
+  if (any(is.na(ages)))
+    stop("Column names of N must be numeric ages")
+
+  if (!cutage %in% ages)
+    stop("cutage not found in column names")
+
+  ## --- index sets ---
+  GE <- which(ages >= cutage)   # ages in plus group
+  E  <- which(ages == cutage)   # plus-group column
+  low <- which(ages < cutage)   # ages kept as-is
+
+  ## --- construct plus group numbers (additive) ---
+  N_plus <- rowSums(N[, GE, drop = FALSE])
+
+  ## --- weights for means (numbers-weighted) ---
+  w <- N[, GE, drop = FALSE] / rowSums(N[, GE, drop = FALSE])
+
+  ## --- construct plus group mean ---
+  M_plus <- rowSums(M[, GE, drop = FALSE] * w)
+
+  ## --- build reduced matrices ---
+  N_out <- N[, c(low, E), drop = FALSE]
+  M_out <- M[, c(low, E), drop = FALSE]
+
+  N_out[, E] <- N_plus
+  M_out[, E] <- M_plus
+
+  return(list(
+    N = N_out,
+    M = M_out
+  ))
+}
 
 ## Create sequences for moving window average:
 an = function(n, len) c(seq.int(n), rep(n, len-n))
@@ -283,7 +328,7 @@ rm(list = c("HistLand_raw", "landings"))
 k <- append(k, c("HistLand"))
 ```
 
-### Landings - Results 
+### Landings
 Over the period for which the assessment model uses catch information (2002:`r DataYear`), observers and other sampling programmes have been able to provide estimates of discarded portions of catch from various elements of the fishery.  First we consider only the landings for this period.
 
 ```{r fig.cap= "Recent history landings by country"}
@@ -523,7 +568,7 @@ plt_land_gear <- ggplot(data = IC_agg_temp[IC_agg_temp$CatchCategory == "Landing
 style(ggplotly(plt_land_gear), showlegend = FALSE)
 ```
 
-### Commercial Catches - Results
+### Commercial Catches
 #### Catch Volume (Mass)
 Catches for the year `r DataYear` are summarised across different factors below and are given in tonnes.
 
@@ -878,6 +923,7 @@ IC_agg_temp <- aggregate(CATON~Season+CatchCategory+Area+Fleet,
                          data = IC_agg_temp,
                          FUN = sum)
 IC_agg_temp <- droplevels(IC_agg_temp)
+write.csv(IC_agg_temp, file = paste0("../", DataYear+1, "/Report/Catches_CategoryFleetQuarter.csv"))
 #=====
 
 #===
@@ -1020,6 +1066,205 @@ ggplotly(plt_disrat)
 ```
 
 
+### Investigating Weight, Length & Age Relationships in Catches
+Here we visualise a range of different relationships, overtime, to see how the inter-realationships between Age, Length, Weight, and the integrated value of Fulton's K condition factor have developed over time. 
+
+```{r lengthWeightAgeData}
+#===
+# Data Import and shaping
+#===
+## Read in catch data (before survivor splitting)
+cn <- read.ices("Assessment Input/StockAnnex/cn.dat") # Total catch numbers
+cwr <- read.ices("Assessment Input/StockAnnex/cw.dat") # Total catch numbers
+lf <- read.ices("Assessment Input/StockAnnex/lf.dat") # Landings catch numbers
+df <- cn-lf                                           # Discard catch numbers
+lwr <- read.ices("Assessment Input/StockAnnex/lw.dat") # Mean individual weight in the landings
+dwr <- read.ices("Assessment Input/StockAnnex/dw.dat") # Mean individual weigh in the discards
+dmr <- df*dwr                                          # Discard biomass
+
+lw <- make_plus_group(N = lf, M = lwr, cutage = 7)
+cw <- make_plus_group(N = cn, M = cwr, cutage = 7)
+dw <- make_plus_group(N = df, M = dwr, cutage = 7)
+dm <- make_plus_group(N = df, M = dmr, cutage = 7)
+dfp <- cbind(df[, 1:6], "7" = rowSums(df[, 7:10]))
+cnp <- cbind(cn[, 1:6], "7" = rowSums(cn[, 7:10]))
+w_thr <- ((ifelse(lw$M-dw$M < 0, 0, lw$M-dw$M))/2)+dw$M  # Midpoint between dw and lw, made up by Elliot.  Could be some other relationship.
+
+## Assume DataYear's preferred weight threshold for assessment year.
+w_thr <- rbind(w_thr, w_thr[nrow(w_thr), , drop = FALSE])
+rownames(w_thr)[nrow(w_thr)] <- as.character(as.integer(rownames(w_thr)[nrow(w_thr)]) + 1)
+
+lwdf <- as.data.frame(lw$M)
+lwdf$Year <- rownames(lwdf)
+rownames(lwdf) <- NULL
+lwdf <- melt(lwdf,
+             id.vars = "Year",
+             variable.name = "Age",
+             value.name = "LandingsWeights")
+
+cwdf <- as.data.frame(cw$M)
+cwdf$Year <- rownames(cwdf)
+rownames(cwdf) <- NULL
+cwdf <- melt(cwdf,
+             id.vars = "Year",
+             variable.name = "Age",
+             value.name = "CatchesWeights")
+
+dwdf <- as.data.frame(dw$M)
+dwdf$Year <- rownames(dwdf)
+rownames(dwdf) <- NULL
+dwdf <- melt(dwdf,
+             id.vars = "Year",
+             variable.name = "Age",
+             value.name = "DiscardsWeights")
+
+w_thrdf <- as.data.frame(w_thr)
+w_thrdf$Year <- rownames(w_thrdf)
+rownames(w_thrdf) <- NULL
+w_thrdf <- melt(w_thrdf,
+             id.vars = "Year",
+             variable.name = "Age",
+             value.name = "ThresholdWeights")
+w_thrdf <- w_thrdf[!w_thrdf$Year %in% c(DataYear+1), ]
+
+dfpdf <- as.data.frame(dfp)
+dfpdf$Year <- rownames(dfpdf)
+rownames(dfpdf) <- NULL
+dfpdf <- melt(dfpdf,
+             id.vars = "Year",
+             variable.name = "Age",
+             value.name = "DiscardsNumbers")
+dfpdf$PropDiscardsNumbers <-
+  with(dfpdf,
+       DiscardsNumbers / ave(DiscardsNumbers, Year, FUN = sum))
+
+dmdf <- as.data.frame(dm$M)
+dmdf$Year <- rownames(dmdf)
+rownames(dmdf) <- NULL
+dmdf <- melt(dmdf,
+             id.vars = "Year",
+             variable.name = "Age",
+             value.name = "DiscardsBiomass")
+dmdf$PropDiscardsBiomass <-
+  with(dmdf,
+       DiscardsBiomass / ave(DiscardsBiomass, Year, FUN = sum))
+
+
+alwdf <- Reduce(
+  function(x,y) merge(x, y, by = c("Year", "Age"), all = TRUE),
+  list(cwdf, lwdf, dwdf, w_thrdf, dfpdf, dmdf)
+)
+alwdf$RevAge <- factor(alwdf$Age, levels = rev(levels(alwdf$Age)))
+```
+#### Catch weight at age (CWAA)
+This section currently takes in pre-calculated catch-weight at age data (before splitting surviving discards out). These calculations should be integrated at the begining of the script.
+
+```{r eval=TRUE, fig.cap= paste0("Catch weight at age by year, over time")}
+
+ggplotly(
+  ggplot(data = alwdf) +
+    geom_line(mapping = aes(x = Year,
+                            y = CatchesWeights,
+                            colour = RevAge,
+                            group  = RevAge   # ← THIS FIXES (x,1)
+    )) +
+    scale_color_manual(name   = "Age",
+                       values = ebpal
+    ) +
+    theme_few() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+)
+```
+
+#### Contributions of Ages to discards over time
+```{r fig.cap="Number at age in discards over time."}
+ggplotly(
+  ggplot(data = alwdf) +
+    geom_area(mapping = aes(x = Year,
+                            y = DiscardsNumbers,
+                            group = RevAge,
+                            fill = RevAge)) +
+    theme_few() +
+    scale_fill_viridis_d(name   = "Age",
+                         option = "viridis") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+)
+```
+
+```{r fig.cap="Proportion of Numbers at age in discards over time."}
+ggplotly(
+  ggplot(data = alwdf) +
+    geom_area(mapping = aes(x = Year,
+                            y = PropDiscardsNumbers,
+                            group = RevAge,
+                            fill = RevAge)) +
+    theme_few() +
+    scale_fill_viridis_d(name   = "Age",
+                         option = "viridis") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+)
+
+```
+
+```{r fig.cap="Biomass at age in discards over time."}
+ggplotly(
+  ggplot(data = alwdf) +
+    geom_area(mapping = aes(x = Year,
+                            y = DiscardsBiomass,
+                            group = RevAge,
+                            fill = RevAge)) +
+    theme_few() +
+    scale_fill_viridis_d(name   = "Age",
+                         option = "viridis") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+)
+
+```
+
+```{r fig.cap="Proportion of Biomass at age in discards over time."}
+ggplotly(
+  ggplot(data = alwdf) +
+    geom_area(mapping = aes(x = Year,
+                            y = PropDiscardsBiomass,
+                            group = RevAge,
+                            fill = RevAge)) +
+    theme_few() +
+    scale_fill_viridis_d(name   = "Age",
+                         option = "viridis") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+)
+
+```
+
+
+#### Threshold weights at age
+```{r fig.cap="Threshold weights at age (kg) over time (purple line), bounded by the landings weight at age (upper green ribbon) and the discard weight at age (lower green ribbon)"}
+ggplotly(
+  ggplot(data = alwdf) +
+    geom_line(mapping = aes(x = Year,
+                            y = ThresholdWeights,
+                            group = Age),
+              colour = ebpal[1],
+              size = 1.5) +
+    geom_ribbon(mapping = aes(x = Year,
+                              ymin = DiscardsWeights,
+                              ymax = LandingsWeights,
+                              group = Age),
+                colour = ebpal[2],
+                fill = ebpal[2],
+                alpha = 0.25) +
+    ylab("Weights (kg) at age") +
+    facet_wrap(facets = vars(Age)) +
+  theme_linedraw() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+)
+```
+
+```{r tab.cap="Annual weight-at-age threshold values for desirable fish"}
+kable(w_thr, digits = 2, row.names = TRUE)
+```
+
+
 ### Catches - advice sheet requirements
 The advice sheets require specific information which is presented below
 ```{r CatchLandingDiscardDataYear, eval=FALSE}
@@ -1052,10 +1297,33 @@ IC_agg_temp <- aggregate(CATON~Area+CatchCategory,
                          FUN = sum)
 IC_agg_temp <- droplevels(IC_agg_temp)
 
-IC_agg_temp <- data.frame(Subdivision = c("SD 21", "SDs 22-32"),
-                          `Catch 2024` = c(sum(IC_agg_temp[IC_agg_temp$Area == "27.3.a.21", "CATON"]), sum(IC_agg_temp[IC_agg_temp$Area != "27.3.a.21", "CATON"])),
-                          `Landings 2024` = c(sum(IC_agg_temp[IC_agg_temp$Area == "27.3.a.21" & IC_agg_temp$CatchCategory == "Landings", "CATON"]), sum(IC_agg_temp[IC_agg_temp$Area != "27.3.a.21" & IC_agg_temp$CatchCategory == "Landings", "CATON"])),
-                          `Discards 2024` = c(sum(IC_agg_temp[IC_agg_temp$Area == "27.3.a.21" & IC_agg_temp$CatchCategory %in% c("BMS", "Discards"), "CATON"]), sum(IC_agg_temp[IC_agg_temp$Area != "27.3.a.21" & !IC_agg_temp$CatchCategory %in% c("BMS", "Discards"), "CATON"])))
+IC_agg_temp <- setNames(
+  data.frame(
+    Subdivision = c("SD 21", "SDs 22-32"),
+    c(
+      sum(IC_agg_temp[IC_agg_temp$Area == "27.3.a.21", "CATON"]),
+      sum(IC_agg_temp[IC_agg_temp$Area != "27.3.a.21", "CATON"])
+    ),
+    c(
+      sum(IC_agg_temp[IC_agg_temp$Area == "27.3.a.21" &
+                      IC_agg_temp$CatchCategory == "Landings", "CATON"]),
+      sum(IC_agg_temp[IC_agg_temp$Area != "27.3.a.21" &
+                      IC_agg_temp$CatchCategory == "Landings", "CATON"])
+    ),
+    c(
+      sum(IC_agg_temp[IC_agg_temp$Area == "27.3.a.21" &
+                      IC_agg_temp$CatchCategory %in% c("BMS", "Discards"), "CATON"]),
+      sum(IC_agg_temp[IC_agg_temp$Area != "27.3.a.21" &
+                      !IC_agg_temp$CatchCategory %in% c("BMS", "Discards"), "CATON"])
+    )
+  ),
+  c(
+    "Subdivision",
+    paste0("Catch ", DataYear),
+    paste0("Landings ", DataYear),
+    paste0("Discards ", DataYear)
+  )
+)
 
 
 kable(IC_agg_temp,
@@ -2407,7 +2675,7 @@ save_as_lowestoft(mo3orderwSAM[, !colnames(mo3orderwSAM) %in% "year"],
 ```
 
 
-```{r MOTable_AnnualEstimates}
+```{r MOTable_AnnualEstimates, tab.cap=paste0("Maturity Ogives of Ple.27.21-32, using annual estimates from surveys for the whole timeseries, 2002:", DataYear+1)}
 moRawOrder <- mat_ogive_combsex[mat_ogive_combsex$year %in% c(2002:(DataYear+1)), ]
 rownames(moRawOrder) <- NULL
 
@@ -2434,13 +2702,11 @@ save_as_lowestoft(moRawOrderSAM[, !colnames(moRawOrderSAM) %in% "year"],
                   age_range = paste(c(1, 10), collapse = "\t"),
                   timeseries_type = paste(c(1, "# 1 indicates annually varying, 2 indicates fixed values"), collapse = "\t"))
 
-kable(moRawOrder, 
-      caption = paste0("Maturity Ogives of Ple.27.21-32, using annual estimates from surveys for the whole timeseries, 2002:", DataYear+1),
-      digits = 2)
+kable(moRawOrder, digits = 2)
 ```
 
 
-```{r MOTable_sw5}
+```{r MOTable_sw5, tab.cap=paste0("Maturity Ogives of Ple.27.21-32, using a 5 year sliding window mean approach.  Values are timeseries means of the whole timeseries, 2002:", DataYear+1)}
 mo5order <- mo5swL[order(mo5swL$year, mo5swL$AgeN), c("year", "AgeN", "PropMat") ]
 rownames(mo5order) <- NULL
 mo5orderw <- dcast(mo5order, year ~ AgeN, value.var = "PropMat")
@@ -2468,9 +2734,7 @@ save_as_lowestoft(mo5orderwSAM[, !colnames(mo5orderwSAM) %in% "year"],
                   age_range = paste(c(1, 10), collapse = "\t"),
                   timeseries_type = paste(c(1, "# 1 indicates annually varying, 2 indicates fixed values"), collapse = "\t"))
 
-kable(mo5orderw, 
-      caption = paste0("Maturity Ogives of Ple.27.21-32, using a 5 year sliding window mean approach.  Values are timeseries means of the whole timeseries, 2002:", DataYear+1),
-      digits = 2)
+kable(mo5orderw, digits = 2)
 ```
 
 ```{r MOTable_AnnualSmoothedEstimates}
@@ -2667,7 +2931,7 @@ In plenary at the Benchmark Workshop, it was decided that the levels of maturity
 
 Because of this we can produce some ogives with ages 1, or 1 & 2 set to zero, based on expert opinion.  The stock annex calls for only Age 1 to be set to zero, post-hoc.
 
-```{r fig.cap="Five-year sliding window mean of maturity at age, with age 1 set to 0, post-hoc. Black dotted line and error bars represent the running mean method applied to the old ple.27.21-23 stock"}
+```{r tab.cap=="Five-year sliding window mean of maturity at age, with age 1 set to 0, post-hoc."}
 mo5swL_1zero <- mo5swL
 mo5swL_1zero[mo5swL_1zero$AgeN %in% c(1), c("PropMat", "StdErrPropMat","ymax", "ymin")] <- 0
 mo5swL_1zero$yearF <- as.factor(as.character(mo5swL_1zero$year))
@@ -2698,6 +2962,11 @@ save_as_lowestoft(df = mo5swW_1zeroSAM,
                   age_range = paste(c(1, 10), collapse = "\t"),
                   timeseries_type = 1)
 
+kable(mo5swW_1zero, digits = 2)
+
+```
+
+```{r fig.cap="Five-year sliding window mean of maturity at age, with age 1 set to 0, post-hoc. Black dotted line and error bars represent the running mean method applied to the old ple.27.21-23 stock"}
 plt_mo5swL_1zero <- ggplot() +
   geom_line(data = mo5swL_1zero,
             mapping = aes(x = AgeN,
@@ -3776,6 +4045,15 @@ plt_rlat <- ggplot() +
 ggplotly(plt_rlat)
 ``` 
 
+### Condition Factor
+As developments in stock-weights at age, maturity at age, and natural mortality have been observed, we also want to check how condition factors have been varying.  Furthermore, condition factor is often corellated with length, so with increasing proportions of small fish, overall stock condition factor may start to look like it is decreasing.  Therefore this effect needs to be either modelled, or condition only compared within discretised length groups. (WORK IN PROGRESS)
+
+```{r conditionFactor, eval=FALSE}
+
+
+```
+
+
 ### Natural Mortality Estimates
 Prior assessments of the different components of this stock utilised the _magic numbers_ of temporally fixed natural mortality, with some rough guesses of variation across ages.  Now we use the Gislason (et al. 2010) method for estimating natural mortality based on length, $L_{\infty}$, and $K$.
 $$
@@ -4246,14 +4524,6 @@ save_as_lowestoft(df = nm_scaled[, colnames(nm_scaled)[-1]],
 #       caption = "Time invariant natural mortality estimates from Gislason method scaled according to optimised likelihood profile runs.")
 ```
 
-### Catch weight at age (CWAA)
-This section is currently a work in progress - need to figure out the appropriate method to raise intercatch data according to the allocations, manually, to be able to automatically update the section each year (instead of copy-pasting intercatch ouput for multiple tables every year).
-```{r CWAA table, eval=FALSE}
-cw_df <- cw
-
-```
-
-
 ## Cohort Tracking
 We can track the progression of different cohorts through time from both commercial and survey data.
 
@@ -4386,7 +4656,7 @@ plt_catchTime <- ggplot() +
 ggplotly(plt_catchTime)
 #=====
 ```
-### SUrvey Cohorts
+### Survey Cohorts
 Now, let's do the same with survey estimations of numbers at age.
 
 ```{r survCohortMatrices}
@@ -4412,7 +4682,7 @@ survcohorts$Year <- as.factor(as.character(survcohorts$Year))
 k <- append(k, c("survcohorts"))
 ```
 
-```{r fig.cap= "Bubble plot showing numbers (size of bubble) at age (y-axis), over time (x-axis) estimated from surveys.  The dotted lines show the progression of co-horts where large and small numbers at age can be tracked year to year.", fig.height=18}
+```{r fig.cap= paste0("Bubble plot showing numbers (size of bubble) at age (y-axis), over time (x-axis) estimated from survey indices. The dotted lines show the progression of co-horts where large and small numbers at age can be tracked year to year.")}
 #===
 # Data Prep
 #====
@@ -4434,28 +4704,27 @@ plt_survCohorts <- ggplot() +
   geom_point(data = survTunLng,
              mapping = aes(x = Year,
                            y = Age,
-                           size = Index)) +
+                           size = Index),
+             alpha = 0.5) +
   geom_line(data = survcohortsLng,
             mapping = aes(x = Year,
                           y = Age,
                           group = Cohort),
-            linetype = "dotted") +
+            linetype = "dotted",
+            alpha = 0.25) +
   theme_clean() +
   coord_cartesian(xlim = c(1999,DataYear)) +
   facet_grid(rows = vars(Survey)) +
-  scale_y_continuous(
-    breaks = function(limits) {
-      seq(from = ceiling(limits[1] / 3) * 3,
-          to   = floor(limits[2] / 3) * 3,
-          by   = 3)}) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 
 ggplotly(plt_survCohorts)
+
 k <- append(k, "survcohortsLng")
 rm(list = ls()[!ls() %in% k])
 #======
 ```
-```{r fig.cap= "Bubble plot showing RELATIVE (within year) numbers (size of bubble) at age (y-axis), over time (x-axis) estimated from surveys.  The dotted lines show the progression of co-horts where large and small numbers at age can be tracked year to year.", fig.height=18}
+
+```{r fig.cap= "Bubble plot showing RELATIVE (within year) numbers (size of bubble) at age (y-axis), over time (x-axis) estimated from surveys.  The dotted lines show the progression of co-horts where large and small numbers at age can be tracked year to year."}
 #===
 # Data Prep
 #====
@@ -4474,28 +4743,37 @@ relSurvTunLng$Year <- as.numeric(as.character(relSurvTunLng$Year))
 #===
 # Plot
 #=====
-plt_relSurvCohorts <- ggplot() +
+plt_relSurvCohorts <- ggplotly(
+  ggplot() +
   geom_point(data = relSurvTunLng,
              mapping = aes(x = Year,
                            y = Age,
-                           size = RelativeIndex)) +
+                           size = RelativeIndex),
+             alpha = 0.5) +
   geom_line(data = survcohortsLng,
             mapping = aes(x = Year,
                           y = Age,
                           group = Cohort),
-            linetype = "dotted") +
+            linetype = "dotted",
+            alpha = 0.25) +
   theme_clean() +
   coord_cartesian(xlim = c(1999,DataYear)) +
   facet_grid(rows = vars(Survey)) +
-  scale_y_continuous(
-    breaks = function(limits) {
-      seq(from = ceiling(limits[1] / 3) * 3,
-          to   = floor(limits[2] / 3) * 3,
-          by   = 3)}) +
+  scale_y_continuous(limits = c(1, 7), breaks = seq(1, 7, by = 3)) +
+  # scale_size(range = c(1, 6)) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+)
 
-ggplotly(plt_relSurvCohorts)
-k <- append(k, "survcohortsLng")
+
+for (i in seq_along(plt_relSurvCohorts$x$layout)) {
+  if (grepl("^yaxis", names(plt_relSurvCohorts$x$layout)[i])) {
+    plt_relSurvCohorts$x$layout[[i]]$autorange <- FALSE
+  }
+}
+
+plt_relSurvCohorts
+
+k <- append(k, "relSurvTunLng")
 rm(list = ls()[!ls() %in% k])
 #======
 ```
